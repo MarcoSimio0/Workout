@@ -1,0 +1,62 @@
+{
+  "formato": "scheda-palestra",
+  "versione": 1,
+  "nome": "Upper/Lower 4 giorni",
+  "dataInizio": "2026-10-29",
+  "note": "Notazione: serie×ripetizioni, B = buffer (ripetizioni di margine), rec = recupero.",
+  "regoleProgressione": [
+    "Fondamentali: quando completi tutte le serie con più margine del buffer previsto, +2,5 kg.",
+    "Trazioni a cluster: +1 ripetizione su una serie ogni settimana (2-2-2-2-3, poi 3-2-2-2-3, ecc.).",
+    "Arrivato a 5×4 nelle trazioni a cluster, le trazioni diventano il fondamentale del giovedì (4×6) al posto della lat machine."
+  ],
+  "giorni": [
+    {
+      "nome": "Upper A",
+      "giornoSettimana": "Lunedì",
+      "esercizi": [
+        { "nome": "Panca piana bilanciere", "serie": 4, "ripetizioni": "6", "buffer": 3, "recupero": 180 },
+        { "nome": "Rematore manubrio un braccio", "serie": 4, "ripetizioni": "6", "buffer": 2, "recupero": 150 },
+        { "nome": "Trazioni negative", "serie": 4, "ripetizioni": "3", "recupero": 120, "note": "Discesa controllata di 4-5 secondi" },
+        { "nome": "Alzate laterali al cavo", "serie": 4, "ripetizioni": "15", "recupero": 90, "superserie": "A" },
+        { "nome": "Face pull", "serie": 4, "ripetizioni": "15", "recupero": 90, "superserie": "A" },
+        { "nome": "Preacher curl", "serie": 3, "ripetizioni": "12", "recupero": 90, "superserie": "B" },
+        { "nome": "Pushdown", "serie": 3, "ripetizioni": "12", "recupero": 90, "superserie": "B" }
+      ]
+    },
+    {
+      "nome": "Lower A",
+      "giornoSettimana": "Martedì",
+      "esercizi": [
+        { "nome": "Squat", "serie": 5, "ripetizioni": "5", "buffer": 3, "recupero": 180 },
+        { "nome": "Stacco rumeno", "serie": 3, "ripetizioni": "8", "buffer": 2, "recupero": 120 },
+        { "nome": "Calf in piedi", "serie": 4, "ripetizioni": "12", "recupero": 90 },
+        { "nome": "Leg curl", "serie": 3, "ripetizioni": "15", "recupero": 90 }
+      ]
+    },
+    {
+      "nome": "Upper B",
+      "giornoSettimana": "Giovedì",
+      "esercizi": [
+        { "nome": "Trazioni a cluster", "serie": 5, "ripetizioni": "2", "ripetizioniPerSerie": [2, 2, 2, 2, 2], "recupero": 120, "note": "Mai a cedimento" },
+        { "nome": "Lat machine presa neutra", "serie": 4, "ripetizioni": "6", "buffer": 3, "recupero": 180 },
+        { "nome": "Dip", "serie": 3, "ripetizioni": "8-10", "recupero": 120 },
+        { "nome": "T-bar row petto appoggiato, presa larga", "serie": 3, "ripetizioni": "10", "buffer": 2, "recupero": 120 },
+        { "nome": "Reverse fly", "serie": 4, "ripetizioni": "15-20", "recupero": 90, "superserie": "A" },
+        { "nome": "Alzate laterali", "serie": 4, "ripetizioni": "15-20", "recupero": 90, "superserie": "A" },
+        { "nome": "Overhead extension", "serie": 2, "ripetizioni": "15-20", "recupero": 90, "superserie": "B" },
+        { "nome": "Curl a martello", "serie": 2, "ripetizioni": "15-20", "recupero": 90, "superserie": "B" }
+      ]
+    },
+    {
+      "nome": "Lower B",
+      "giornoSettimana": "Venerdì",
+      "esercizi": [
+        { "nome": "Stacco da terra", "serie": 4, "ripetizioni": "6", "buffer": 3, "recupero": 180 },
+        { "nome": "Calf seduto", "serie": 3, "ripetizioni": "20", "recupero": "60-90" },
+        { "nome": "Leg press 45°", "serie": 3, "ripetizioni": "10", "buffer": 2, "recupero": 120 },
+        { "nome": "Leg extension", "serie": 2, "ripetizioni": "15-20", "recupero": 90, "superserie": "A" },
+        { "nome": "Leg curl", "serie": 2, "ripetizioni": "15-20", "recupero": 90, "superserie": "A" }
+      ]
+    }
+  ]
+}
