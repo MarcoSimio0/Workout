@@ -211,6 +211,14 @@ details.seduta[open] summary { margin-bottom: 8px; }
 
 /* ---------- Dieta ---------- */
 .segmenti.cinque { grid-template-columns: repeat(5, 1fr); }
+.segmenti.sei { grid-template-columns: repeat(5, 1fr) 34px; }
+.segmenti.sei button { font-size: 12.5px; padding-left: 0; padding-right: 0; }
+.dt-tre { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0 4px; }
+.dt-tre b { display: block; font-size: 21px; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.dt-tre .saldo b { font-size: 24px; }
+.dt-conto .gruppo { margin-top: 6px; font-weight: 600; }
+.dt-conto .sotto { color: var(--muto); }
+.dt-conto span.sotto:nth-child(odd) { padding-left: 12px; }
 .dt-sezioni { margin-bottom: 14px; }
 .dt-naviga { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 8px; margin: 12px 0; text-align: center; }
 .dt-naviga .btn { padding: 0; font-size: 24px; font-weight: 400; }
@@ -245,7 +253,6 @@ details.seduta[open] summary { margin-bottom: 8px; }
 .dt-riga-azioni .btn { min-height: 34px; padding: 0 6px; font-size: 14px; }
 .dt-form { border-top: 1px solid var(--bordo); margin-top: 8px; padding-top: 10px; }
 .card > .dt-form:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
-.dt-tipi { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; font-size: 14px; }
 .dt-piano { margin: 6px 0; padding-left: 18px; }
 .legenda { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muto); margin-top: 6px; }
 .legenda span { display: inline-flex; align-items: center; gap: 5px; }

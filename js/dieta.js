@@ -8,7 +8,7 @@ const PASTI = ['Colazione', 'Spuntino', 'Pranzo', 'Merenda', 'Cena', 'Sera'];
 const GIORNI_BREVI = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'];
 const COLORE_SOPRA = '#e66767';
 const COLORE_SOTTO = '#3987e5';
-const SEZIONI_DIETA = [['giorno', 'Giorno'], ['sgarri', 'Sgarri'], ['attivita', 'Attività'], ['bilancio', 'Bilancio'], ['impostazioni', '⚙']];
+const SEZIONI_DIETA = [['giorno', 'Giorno'], ['sgarri', 'Sgarri'], ['passi', 'Passi'], ['attivita', 'Attività'], ['bilancio', 'Bilancio'], ['impostazioni', '⚙']];
 const PERIODI = [['giorno', 'Giorno'], ['settimana', 'Sett.'], ['mese', 'Mese'], ['trimestre', 'Trim.'], ['anno', 'Anno']];
 const PERIODI_EXPORT = [['7', 'Ultimi 7 giorni'], ['14', 'Ultimi 14 giorni'], ['30', 'Ultimi 30 giorni'], ['settimana', 'Questa settimana (da lunedì)'], ['mese', 'Questo mese']];
 
@@ -141,7 +141,6 @@ function piuGiorni(iso, n) {
   return dataISO(d);
 }
 
-const giorniTra = (a, b) => Math.round((dataLocale(b) - dataLocale(a)) / 86400000);
 const lunediDi = iso => piuGiorni(iso, -((dataLocale(iso).getDay() + 6) % 7));
 const giornoMostrato = () => statoDieta.data || oggiISO();
 
@@ -520,6 +519,8 @@ function serieBilancio(tipo, da, a) {
   giorni.forEach(c => {
     const s = secchi.find(x => c.data >= x.da && c.data <= x.a);
     s.valore = (s.valore || 0) + c.bilancio;
+    s.mangiato = (s.mangiato || 0) + c.mangiato;
+    s.consumato = (s.consumato || 0) + c.consumato;
     s.giorni++;
   });
   let cumulato = 0;
@@ -1068,9 +1069,9 @@ function svgBilancio(secchi, tipo, sel) {
 
 function renderDieta() {
   const s = statoDieta.sezione;
-  const viste = { giorno: htmlGiorno, sgarri: htmlSgarri, attivita: htmlAttivita, bilancio: htmlBilancio, impostazioni: htmlImpostazioni };
+  const viste = { giorno: htmlGiorno, sgarri: htmlSgarri, passi: htmlPassi, attivita: htmlAttivita, bilancio: htmlBilancio, impostazioni: htmlImpostazioni };
   contenuto.innerHTML = `
-    <div class="segmenti cinque dt-sezioni">
+    <div class="segmenti sei dt-sezioni">
       ${SEZIONI_DIETA.map(([k, t]) => `<button data-azione="dt-sezione" data-s="${k}" class="${k === s ? 'attiva' : ''}"${k === 'impostazioni' ? ' aria-label="Impostazioni della dieta"' : ''}>${t}</button>`).join('')}
     </div>
     ${viste[s]()}`;
@@ -1079,22 +1080,46 @@ function renderDieta() {
 function statoSaldo(v) {
   const r = Math.round(v);
   const colore = r > 0 ? COLORE_SOPRA : r < 0 ? COLORE_SOTTO : '#5b6577';
-  return `<div class="dt-stato"><i style="background:${colore}"></i>${r > 0 ? 'sopra la dieta' : r < 0 ? 'sotto la dieta' : 'in pari con la dieta'}</div>`;
+  const testo = r > 0 ? 'surplus: mangiato più di quanto consumato' : r < 0 ? 'deficit: consumato più di quanto mangiato' : 'in pari';
+  return `<div class="dt-stato"><i style="background:${colore}"></i>${testo}</div>`;
+}
+
+// Le tre parti del bilancio, sempre separate: mangiato, consumato, saldo.
+function treParti(mangiato, consumato, saldo) {
+  return `
+    <div class="dt-tre">
+      <div><div class="etichetta">Mangiato</div><b>${fmtKcal(mangiato)}</b></div>
+      <div><div class="etichetta">Consumato</div><b>${fmtKcal(consumato)}</b></div>
+      <div class="saldo"><div class="etichetta">Saldo</div><b>${fmtSaldo(saldo)}</b></div>
+    </div>
+    ${statoSaldo(saldo)}`;
+}
+
+function etichettaPassi(p) {
+  const passi = p.attuale?.passi != null ? fmtKcal(p.attuale.passi) + ' passi' : '';
+  const origine = !p.attuale ? 'non inseriti' : p.stimata ? 'stima' : p.attuale.kcal != null ? 'kcal inserite' : '';
+  return 'Passi' + ([passi, origine].filter(Boolean).length ? ` (${[passi, origine].filter(Boolean).join(', ')})` : '');
 }
 
 function contoGiorno(c) {
   const riga = (t, v, cls = '') => `<span class="${cls}">${t}</span><span class="${cls}">${v}</span>`;
+  const p = c.passi;
   return `
     <div class="dt-conto">
-      ${riga('Dieta prevista', fmtKcal(c.dietaBase))}
-      ${c.scambi ? riga('Alternative scelte', fmtSaldo(c.scambi)) : ''}
-      ${riga('Voci e pasti tolti', '−' + fmtKcal(c.tolto))}
-      ${riga('Sgarri', '+' + fmtKcal(c.kcalSgarri))}
-      ${riga('Mangiato (stima)', fmtKcal(c.mangiato), 'totale')}
-      ${riga('Obiettivo della dieta', fmtKcal(c.obiettivo))}
-      ${riga('Attività extra', '+' + fmtKcal(c.extra))}
-      ${riga('Bersaglio', fmtKcal(c.bersaglio), 'totale')}
-    </div>`;
+      ${riga('Mangiato', fmtKcal(c.mangiato), 'gruppo')}
+      ${riga('Dieta', fmtKcal(c.dietaBase), 'sotto')}
+      ${c.scambi ? riga('Alternative scelte', fmtSaldo(c.scambi), 'sotto') : ''}
+      ${riga('Voci e pasti tolti', '−' + fmtKcal(c.tolto), 'sotto')}
+      ${riga('Sgarri', '+' + fmtKcal(c.kcalSgarri), 'sotto')}
+      ${riga('Consumato', fmtKcal(c.consumato), 'gruppo')}
+      ${riga('Metabolismo basale', c.basale ? fmtKcal(c.basale) : 'manca', 'sotto')}
+      ${riga(esc(etichettaPassi(p)), fmtKcal(p.kcal), 'sotto')}
+      ${p.kcal && p.aPiedi ? riga('già nelle attività a piedi', '−' + fmtKcal(Math.min(p.kcal, p.aPiedi)), 'sotto') : ''}
+      ${riga('Attività', fmtKcal(c.kcalAttivita), 'sotto')}
+      ${riga('Saldo', fmtSaldo(c.bilancio) + ' kcal', 'totale')}
+    </div>
+    ${c.basale ? '' : '<div class="nota">Manca il metabolismo basale: impostalo in ⚙, altrimenti il consumato è troppo basso.</div>'}
+    ${p.senzaPeso ? '<div class="nota">Per stimare le calorie dei passi serve il peso: impostalo in ⚙.</div>' : ''}`;
 }
 
 function rigaSgarro(s, conData, conAzioni = true) {
@@ -1119,18 +1144,17 @@ function rigaSgarro(s, conData, conAzioni = true) {
 }
 
 function rigaAttivita(a, conAzioni) {
-  const prevista = attivitaPrevista(a);
+  const aPiedi = a.fonte === 'garmin' && A_PIEDI.includes(a.categoria);
   return `
     <div class="dt-riga">
       <div>
         <b>${esc(TIPI_ATTIVITA[a.categoria]?.nome || 'Attività')}</b>${a.fonte !== 'manuale' && a.nome ? ` <span class="muto">${esc(a.nome)}</span>` : ''}
         <div class="muto piccolo">${esc(fmtGiorno(a.data))} · ${esc(descrAttivita(a))}</div>
         <div class="piccolo">${fmtKcal(kcalAttive(a))} kcal attive <span class="muto">· ${esc(origineKcal(a))}</span></div>
-        ${conAzioni ? `<div class="piccolo${prevista ? ' muto' : ''}">${prevista ? 'Già prevista dalla dieta: non conta' : 'Conta come attività extra'}</div>` : ''}
+        ${conAzioni && aPiedi ? '<div class="muto piccolo">A piedi: le sue kcal si tolgono da quelle dei passi del giorno.</div>' : ''}
       </div>
       ${conAzioni ? `
       <div class="dt-riga-azioni">
-        <button class="btn testo" data-azione="dt-prevista" data-id="${esc(a.id)}">${prevista ? 'Conta come extra' : 'Già prevista'}</button>
         <button class="btn testo pericolo" data-azione="dt-elimina-attivita" data-id="${esc(a.id)}">Elimina</button>
       </div>` : ''}
     </div>`;
@@ -1193,9 +1217,22 @@ function htmlIncollaSgarro() {
 
 // ---------- Giorno ----------
 
+function htmlNavigaGiorno(data) {
+  const oggi = oggiISO();
+  return `
+    <div class="dt-naviga">
+      <button class="btn" data-azione="dt-giorno-sposta" data-d="-1" aria-label="Giorno precedente">‹</button>
+      <div>
+        <b>${esc(fmtGiorno(data, true))}</b>
+        ${data === oggi ? '<span class="muto piccolo">oggi</span>' : '<button class="btn testo piccolo" data-azione="dt-oggi">torna a oggi</button>'}
+      </div>
+      <button class="btn" data-azione="dt-giorno-sposta" data-d="1" aria-label="Giorno successivo"${data >= oggi ? ' disabled' : ''}>›</button>
+    </div>`;
+}
+
 function htmlGiorno() {
   const d = D();
-  const data = giornoMostrato(), oggi = oggiISO();
+  const data = giornoMostrato();
   const c = calcolaGiorno(data);
   const contato = data >= inizioMonitoraggio();
   const fermo = p => p.saltato || p.sostituitoDa;
@@ -1243,25 +1280,18 @@ function htmlGiorno() {
     : `
     <section class="card">
       <h3>Nessuna dieta caricata</h3>
-      <p class="muto piccolo">Caricala da ⚙: finché manca, il saldo conta solo sgarri e attività.${c.saltatiSenzaDieta.length ? ` Per questo giorno hai già segnato come saltato: ${esc(c.saltatiSenzaDieta.join(', '))}.` : ''}</p>
+      <p class="muto piccolo">Caricala da ⚙: finché manca, nel mangiato contano solo gli sgarri.${c.saltatiSenzaDieta.length ? ` Per questo giorno hai già segnato come saltato: ${esc(c.saltatiSenzaDieta.join(', '))}.` : ''}</p>
       <div class="riga-bottoni"><button class="btn primario" data-azione="dt-vai-impostazioni">Carica la dieta</button></div>
     </section>`;
 
   return `
-    <div class="dt-naviga">
-      <button class="btn" data-azione="dt-giorno-sposta" data-d="-1" aria-label="Giorno precedente">‹</button>
-      <div>
-        <b>${esc(fmtGiorno(data, true))}</b>
-        ${data === oggi ? '<span class="muto piccolo">oggi</span>' : '<button class="btn testo piccolo" data-azione="dt-oggi">torna a oggi</button>'}
-      </div>
-      <button class="btn" data-azione="dt-giorno-sposta" data-d="1" aria-label="Giorno successivo"${data >= oggi ? ' disabled' : ''}>›</button>
-    </div>
+    ${htmlNavigaGiorno(data)}
 
     <section class="card dt-saldo">
-      <div class="etichetta">Saldo del giorno</div>
-      <div class="dt-numero">${fmtSaldo(c.bilancio)} <span class="piccolo muto">kcal</span></div>
-      ${statoSaldo(c.bilancio)}
+      <div class="etichetta">Bilancio del giorno (kcal)</div>
+      ${treParti(c.mangiato, c.consumato, c.bilancio)}
       ${contoGiorno(c)}
+      <div class="riga-bottoni"><button class="btn" data-azione="dt-sezione" data-s="passi">Aggiorna i passi</button></div>
       ${contato ? '' : `<div class="nota">Questo giorno viene prima dell'inizio del monitoraggio (${esc(fmtGiorno(inizioMonitoraggio()))}): non entra nel bilancio.</div>`}
     </section>
 
@@ -1275,15 +1305,112 @@ function htmlGiorno() {
     ${htmlIncollaSgarro()}
 
     <section class="card">
-      <h3>Attività${c.extra ? ` <span class="muto">extra ${fmtKcal(c.extra)} kcal</span>` : ''}</h3>
+      <h3>Attività${c.kcalAttivita ? ` <span class="muto">${fmtKcal(c.kcalAttivita)} kcal</span>` : ''}</h3>
       ${c.attivita.length ? c.attivita.map(x => rigaAttivita(x.a, true)).join('') : '<p class="muto piccolo">Nessuna attività registrata.</p>'}
-      ${d.impostazioni.attivitaPrevistaKcal && c.kcalAttivita ? `<p class="muto piccolo">Le prime ${fmtKcal(d.impostazioni.attivitaPrevistaKcal)} kcal di attività del giorno sono già previste dalla dieta.</p>` : ''}
       ${d.daVerificare.length ? `<div class="nota">Ci sono attività di Garmin da verificare: <button class="btn testo" data-azione="dt-sezione" data-s="attivita">vai ad Attività</button></div>` : ''}
       <div class="riga-bottoni">
         ${BOTTONE_GARMIN()}
         <button class="btn" data-azione="dt-nuova-attivita" data-data="${data}">+ A mano</button>
       </div>
     </section>`;
+}
+
+// ---------- Passi ----------
+
+function testoStimaPassi(f) {
+  const passi = leggiKcal(f.passi), kcal = leggiKcal(f.kcal);
+  const peso = D().impostazioni.peso;
+  if (kcal != null) return `Userò le ${fmtKcal(kcal)} kcal che hai scritto: sono più affidabili della stima.`;
+  if (passi == null) return 'Scrivi i passi, le calorie attive dei passi o entrambi.';
+  if (!peso) return 'Per stimare le calorie dai passi serve il peso: impostalo in ⚙, oppure scrivi le calorie.';
+  return `Stima: ${fmtKcal(passi)} passi × 0,0005 × ${fmtNum(peso)} kg = <b>${fmtKcal(stimaKcalPassi(passi, peso))} kcal</b>`;
+}
+
+function aggiornaStimaPassi() {
+  const el = document.getElementById('stima-passi');
+  if (el) el.innerHTML = testoStimaPassi(statoDieta.formPassi);
+}
+
+function salvaPassi() {
+  const f = statoDieta.formPassi;
+  const passi = leggiKcal(f.passi), kcal = leggiKcal(f.kcal);
+  const err = [];
+  if (passi == null && kcal == null) err.push('Scrivi i passi o le calorie dei passi (basta uno dei due).');
+  if (passi != null && (passi < 0 || !Number.isInteger(passi))) err.push('I passi devono essere un numero intero.');
+  if (kcal != null && kcal < 0) err.push('Le calorie non possono essere negative.');
+  if (err.length) { toast(err.join('\n'), true); return; }
+
+  const d = D(), data = giornoMostrato();
+  const lista = d.passi[data] ??= [];
+  const voce = f.id ? lista.find(x => x.id === f.id) : null;
+  const valori = { passi: passi ?? null, kcal: kcal != null ? Math.round(kcal) : null };
+  if (voce) Object.assign(voce, valori);
+  else lista.push({ id: nuovoId(), registratoIl: new Date().toISOString(), ...valori });
+  statoDieta.formPassi = { id: null, passi: '', kcal: '' };
+  salva();
+  render();
+  const p = passiDel(data);
+  toast(voce ? 'Aggiornamento modificato.' : `Passi aggiornati: ${fmtKcal(p.kcal)} kcal${p.stimata ? ' (stima)' : ''}.`);
+}
+
+function htmlPassi() {
+  const data = giornoMostrato();
+  const p = passiDel(data);
+  const f = statoDieta.formPassi;
+  const peso = D().impostazioni.peso;
+  const quando = iso => new Date(iso).toLocaleString('it-IT', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const kcalVoce = v => v.kcal != null ? `${fmtKcal(v.kcal)} kcal inserite`
+    : peso ? `${fmtKcal(stimaKcalPassi(v.passi, peso))} kcal stimate` : 'kcal da stimare: manca il peso';
+  const riga = (t, v, cls = '') => `<span class="${cls}">${t}</span><span class="${cls}">${v}</span>`;
+
+  return `
+    ${htmlNavigaGiorno(data)}
+
+    <section class="card">
+      <h3>Passi del giorno</h3>
+      ${p.attuale ? `
+        <div class="dt-numero">${p.attuale.passi != null ? fmtKcal(p.attuale.passi) : '—'} <span class="piccolo muto">passi</span></div>
+        <div class="dt-conto">
+          ${riga(p.stimata ? 'Calorie dei passi (stima)' : 'Calorie dei passi (inserite)', fmtKcal(p.kcal))}
+          ${p.aPiedi ? riga('già nelle camminate e corse importate', '−' + fmtKcal(Math.min(p.kcal, p.aPiedi))) : ''}
+          ${riga('Contate nel consumato', fmtKcal(p.nette) + ' kcal', 'totale')}
+        </div>
+        ${p.stimata ? `<p class="muto piccolo">Valore stimato: ${fmtKcal(p.attuale.passi)} × 0,0005 × ${fmtNum(peso)} kg.</p>` : ''}
+        ${p.senzaPeso ? '<div class="nota">Per stimare le calorie dai passi serve il peso: impostalo in ⚙.</div>' : ''}`
+        : '<p class="muto piccolo">Nessun dato per questo giorno.</p>'}
+    </section>
+
+    <section class="card" id="form-passi">
+      <h3>${f.id ? 'Modifica aggiornamento' : 'Aggiorna'}</h3>
+      <p class="muto piccolo">Scrivi il totale della giornata come lo mostra Garmin: sostituisce l'aggiornamento precedente, non si somma. Basta uno dei due campi.</p>
+      <div class="ed-riga">
+        <label class="campo"><span>Passi</span><input inputmode="numeric" data-dt="fp.passi" value="${esc(f.passi)}" autocomplete="off"></label>
+        <label class="campo"><span>Calorie attive dei passi</span><input inputmode="numeric" data-dt="fp.kcal" value="${esc(f.kcal)}" placeholder="facoltative" autocomplete="off"></label>
+      </div>
+      <div class="nota" id="stima-passi">${testoStimaPassi(f)}</div>
+      <div class="riga-bottoni">
+        ${f.id ? '<button class="btn" data-azione="dt-annulla-passi">Annulla</button>' : ''}
+        <button class="btn primario" data-azione="dt-salva-passi">Salva</button>
+      </div>
+    </section>
+
+    <h3 class="sezione">Aggiornamenti del giorno (${p.voci.length})</h3>
+    <section class="card">
+      ${p.voci.length ? p.voci.map((v, k) => `
+        <div class="dt-riga">
+          <div>
+            <b>${v.passi != null ? fmtKcal(v.passi) + ' passi' : 'solo calorie'}</b>${k === 0 ? ' <span class="badge">in uso</span>' : ''}
+            <div class="piccolo">${esc(kcalVoce(v))}</div>
+            <div class="muto piccolo">inserito il ${esc(quando(v.registratoIl))}</div>
+          </div>
+          <div class="dt-riga-azioni">
+            <button class="btn testo" data-azione="dt-modifica-passi" data-id="${esc(v.id)}">Modifica</button>
+            <button class="btn testo pericolo" data-azione="dt-elimina-passi" data-id="${esc(v.id)}">Elimina</button>
+          </div>
+        </div>`).join('') : '<p class="muto piccolo">Nessun aggiornamento.</p>'}
+    </section>
+    <p class="muto piccolo">Vale l'ultimo aggiornamento inserito. Se scrivi le calorie si usano quelle; con i soli passi la stima è kcal = passi × 0,0005 × peso (kg)${peso ? `, cioè circa ${fmtNum(Math.round(KCAL_PER_PASSO_KG * peso * 1000) / 1000)} kcal a passo con ${fmtNum(peso)} kg` : ''}.
+    I passi di Garmin comprendono anche camminate e corse registrate come attività: le loro calorie, se importate da Garmin, si tolgono da quelle dei passi (mai sotto zero). Bici, palestra e altre attività restano separate.</p>`;
 }
 
 // ---------- Sgarri ----------
@@ -1397,39 +1524,35 @@ function htmlAttivita() {
 // ---------- Bilancio ----------
 
 function dettagliBrevi(c) {
-  return [
-    c.scambi ? `alternative ${fmtSaldo(c.scambi)}` : '',
-    c.kcalSgarri ? `sgarri +${fmtKcal(c.kcalSgarri)}` : '',
-    c.tolto ? `tolte −${fmtKcal(c.tolto)}` : '',
-    c.extra ? `attività −${fmtKcal(c.extra)}` : ''
-  ].filter(Boolean).join(' · ') || 'dieta seguita';
+  return `mangiato ${fmtKcal(c.mangiato)} · consumato ${fmtKcal(c.consumato)}`;
 }
 
-function htmlRiepilogo(t, tipo, a) {
+// 7.700 kcal ≈ 1 kg di grasso corporeo.
+function kgEquivalenti(kcal) {
+  const kg = Math.abs(kcal) / 7700;
+  if (kg < 0.05) return '';
+  return `circa ${fmtNum(Math.round(kg * 10) / 10)} kg ${kcal < 0 ? 'in meno' : 'in più'} (7.700 kcal ≈ 1 kg)`;
+}
+
+function htmlRiepilogo(t) {
   if (!t.n) return '<p class="muto piccolo">Nessun giorno conteggiato nel periodo.</p>';
   const riga = (x, v, cls = '') => `<span class="${cls}">${x}</span><span class="${cls}">${v}</span>`;
-  const oggi = oggiISO();
-  let consiglio = '';
-  if (tipo === 'settimana' && a >= oggi) {
-    const rimasti = giorniTra(oggi, a);
-    if (t.bilancio > 0 && rimasti > 0) {
-      consiglio = `<div class="nota">Per chiudere la settimana in pari: circa −${fmtKcal(t.bilancio / rimasti)} kcal al giorno nei prossimi ${rimasti === 1 ? 'giorno' : rimasti + ' giorni'}, tra cibo e attività.</div>`;
-    } else if (t.bilancio <= 0) {
-      consiglio = '<div class="nota">Settimana in linea con la dieta.</div>';
-    }
-  }
+  const kg = kgEquivalenti(t.bilancio);
   return `
+    ${treParti(t.mangiato, t.consumato, t.bilancio)}
     <div class="dt-conto">
-      ${riga('Giorni conteggiati', String(t.n))}
-      ${riga(`Sgarri (${t.nSgarri})`, '+' + fmtKcal(t.sgarri))}
-      ${riga('Voci e pasti tolti', '−' + fmtKcal(t.tolto))}
-      ${riga('Attività extra', '−' + fmtKcal(t.extra))}
-      ${Math.round(t.scarto) ? riga("Dieta rispetto all'obiettivo", fmtSaldo(t.scarto)) : ''}
-      ${riga('Saldo netto', fmtSaldo(t.bilancio) + ' kcal', 'totale')}
-      ${riga('Media al giorno', fmtSaldo(t.bilancio / t.n))}
+      ${riga('Mangiato', fmtKcal(t.mangiato), 'gruppo')}
+      ${riga('Dieta', fmtKcal(t.dieta), 'sotto')}
+      ${riga('Voci e pasti tolti', '−' + fmtKcal(t.tolto), 'sotto')}
+      ${riga(`Sgarri (${t.nSgarri})`, '+' + fmtKcal(t.sgarri), 'sotto')}
+      ${riga('Consumato', fmtKcal(t.consumato), 'gruppo')}
+      ${riga('Metabolismo basale', fmtKcal(t.basale), 'sotto')}
+      ${riga('Passi', fmtKcal(t.passi), 'sotto')}
+      ${riga('Attività', fmtKcal(t.attivita), 'sotto')}
+      ${riga('Saldo', fmtSaldo(t.bilancio) + ' kcal', 'totale')}
+      ${riga(`Media al giorno (${t.n} giorni)`, fmtSaldo(t.bilancio / t.n))}
     </div>
-    ${t.attivita > t.extra ? `<p class="muto piccolo">Attività non prevista dalla dieta: ${fmtKcal(t.attivita)} kcal; ${fmtKcal(t.attivita - t.extra)} rientrano nella quota già prevista.</p>` : ''}
-    ${consiglio}`;
+    ${kg ? `<p class="muto piccolo">Il saldo del periodo equivale a ${kg}.</p>` : ''}`;
 }
 
 function intervalloExport(v) {
@@ -1453,26 +1576,25 @@ function htmlBilancio() {
   let grafico;
   if (tipo === 'giorno') {
     grafico = giorni.length ? `
-      <div class="etichetta">Saldo del giorno</div>
-      <div class="dt-numero">${fmtSaldo(giorni[0].bilancio)} <span class="piccolo muto">kcal</span></div>
-      ${statoSaldo(giorni[0].bilancio)}
+      <div class="etichetta">Bilancio del giorno (kcal)</div>
+      ${treParti(giorni[0].mangiato, giorni[0].consumato, giorni[0].bilancio)}
       ${contoGiorno(giorni[0])}
       <div class="riga-bottoni"><button class="btn" data-azione="dt-apri-giorno" data-data="${da}">Apri il giorno</button></div>`
       : '<p class="vuoto">Questo giorno non entra nel bilancio.</p>';
   } else {
     const s = secchi[sel];
     grafico = `
-      <h3>Saldo ${perSettimana ? 'per settimana' : 'per giorno'}</h3>
+      <h3>Saldo ${perSettimana ? 'per settimana' : 'per giorno'} <span class="muto piccolo">mangiato − consumato</span></h3>
       <div class="grafico">${svgBilancio(secchi, tipo, sel)}</div>
       <div class="legenda">
-        <span><i style="background:${COLORE_SOPRA}"></i>sopra la dieta</span>
-        <span><i style="background:${COLORE_SOTTO}"></i>sotto la dieta</span>
+        <span><i style="background:${COLORE_SOPRA}"></i>surplus</span>
+        <span><i style="background:${COLORE_SOTTO}"></i>deficit</span>
         <span><i class="linea"></i>saldo cumulato</span>
       </div>
       ${s ? `
       <div class="dt-selezione">
         <span>${esc(perSettimana ? `Settimana ${fmtGiorno(s.da)} – ${fmtGiorno(s.a)}` : fmtGiorno(s.da, true))}:
-          <b>${fmtSaldo(s.valore)}</b> · cumulato ${fmtSaldo(s.cumulato)}</span>
+          <b>${fmtSaldo(s.valore)}</b> · cumulato ${fmtSaldo(s.cumulato)}${s.mangiato != null ? `<br><span class="muto piccolo">mangiato ${fmtKcal(s.mangiato)} · consumato ${fmtKcal(s.consumato)}</span>` : ''}</span>
         <button class="btn testo" data-azione="${perSettimana ? 'dt-apri-settimana' : 'dt-apri-giorno'}" data-data="${s.da}">Apri</button>
       </div>` : ''}`;
   }
@@ -1503,7 +1625,7 @@ function htmlBilancio() {
 
     <section class="card">
       <h3>Riepilogo</h3>
-      ${htmlRiepilogo(t, tipo, a)}
+      ${htmlRiepilogo(t)}
     </section>
 
     ${tipo !== 'giorno' && elenco ? `
@@ -1533,15 +1655,13 @@ function htmlBilancio() {
 function htmlPiano(p) {
   const tutti = p.giorni.every(g => !g.giorniSettimana.length);
   return `
-    <b>${esc(p.nome)}</b> · in uso da ${esc(fmtGiorno(p.dataInizio, true))}${p.obiettivoKcal ? ` · obiettivo ${fmtKcal(p.obiettivoKcal)} kcal` : ''}
+    <b>${esc(p.nome)}</b> · in uso da ${esc(fmtGiorno(p.dataInizio, true))}
     <ul class="dt-piano">
       ${p.giorni.map(g => {
         const quando = g.giorniSettimana.length ? g.giorniSettimana.map(i => GIORNI_BREVI[i]).join(', ') : tutti ? 'tutti i giorni' : 'altri giorni';
-        const ob = g.obiettivoKcal ?? p.obiettivoKcal;
-        return `<li>${esc(g.nome)} <span class="muto">(${quando})</span>: ${fmtKcal(totaleGiornata(g))} kcal in ${g.pasti.length} pasti${ob ? `, obiettivo ${fmtKcal(ob)}` : ''}</li>`;
+        return `<li>${esc(g.nome)} <span class="muto">(${quando})</span>: ${fmtKcal(totaleGiornata(g))} kcal in ${g.pasti.length} pasti</li>`;
       }).join('')}
-    </ul>
-    ${p.attivitaInclusa ? `<div class="muto piccolo">Attività già prevista: ${esc(p.attivitaInclusa)}</div>` : ''}`;
+    </ul>`;
 }
 
 function htmlImpostazioni() {
@@ -1554,8 +1674,7 @@ function htmlImpostazioni() {
     const ip = attesa.piano.impostazioni;
     const daImpostare = ip ? [
       ip.basale ? `basale ${fmtKcal(ip.basale)} kcal` : '',
-      ip.peso ? `peso ${fmtNum(ip.peso)} kg` : '',
-      ip.attivitaPrevistaKcal != null ? `attività già prevista ${fmtKcal(ip.attivitaPrevistaKcal)} kcal/giorno` : ''
+      ip.peso ? `peso ${fmtNum(ip.peso)} kg` : ''
     ].filter(Boolean).join(', ') : '';
     anteprima = `
       <div class="nota">${htmlPiano(attesa.piano)}</div>
@@ -1585,18 +1704,14 @@ function htmlImpostazioni() {
         <label class="campo"><span>Basale BIA (kcal/giorno)</span><input inputmode="numeric" data-dt="imp.basale" value="${esc(imp.basale ?? '')}" autocomplete="off"></label>
         <label class="campo"><span>Peso (kg)</span><input inputmode="decimal" data-dt="imp.peso" value="${esc(fmtNum(imp.peso))}" autocomplete="off"></label>
       </div>
-      <p class="muto piccolo">Il peso serve alle stime con i MET.</p>
+      <p class="muto piccolo">Il basale entra ogni giorno nel consumato. Il peso serve alle stime di passi e MET.</p>
       <label class="spunta-campo"><input type="checkbox" data-dt="imp.correzioneBasale"${imp.correzioneBasale ? ' checked' : ''}> Togli il basale dalle calorie di Garmin</label>
-      <p class="muto piccolo">Le calorie di Garmin di solito comprendono anche il metabolismo basale, già contato nella dieta. Con la correzione:
+      <p class="muto piccolo">Le calorie delle attività di Garmin di solito comprendono anche il metabolismo basale, che è già contato a parte. Con la correzione:
       kcal attive = Calorie − basale × (durata in ore / 24).
       Esempio: 30 minuti da 300 kcal con basale ${fmtKcal(imp.basale || 2040)} → 300 − ${fmtKcal((imp.basale || 2040) * 0.5 / 24)} = ${fmtKcal(300 - (imp.basale || 2040) * 0.5 / 24)} kcal attive.</p>
-      <p class="muto piccolo" style="margin-bottom:0">Attività già prevista dalla dieta (non conta come extra):</p>
-      <div class="dt-tipi">
-        ${Object.entries(TIPI_ATTIVITA).map(([k, t]) => `<label class="spunta-campo"><input type="checkbox" data-dt="imp.tipo" data-tipo="${k}"${imp.tipiPrevisti.includes(k) ? ' checked' : ''}> ${t.nome}</label>`).join('')}
-      </div>
-      <label class="campo"><span>Altre kcal di attività al giorno già previste</span><input inputmode="numeric" data-dt="imp.attivitaPrevistaKcal" value="${esc(imp.attivitaPrevistaKcal || '')}" placeholder="0" autocomplete="off"></label>
       <label class="campo"><span>Inizio del monitoraggio</span><input type="date" data-dt="imp.inizio" value="${esc(imp.inizio || '')}"></label>
-      <p class="muto piccolo">Vuoto = dal primo giorno con dati (ora: ${esc(fmtGiorno(inizioMonitoraggio(), true))}). Saldo = (dieta − voci tolte + sgarri) − (obiettivo + attività extra).</p>
+      <p class="muto piccolo">Vuoto = dal primo giorno con dati (ora: ${esc(fmtGiorno(inizioMonitoraggio(), true))}).</p>
+      <p class="muto piccolo">Bilancio = mangiato − consumato. Mangiato = dieta − voci tolte + sgarri. Consumato = basale + passi + attività.</p>
     </section>`;
 }
 
@@ -1657,27 +1772,24 @@ function testoDietaPerClaude(da, a, conAllenamenti) {
   r.push('');
   r.push('== PARAMETRI ==');
   const piano = pianoDel(a);
-  if (piano) {
-    r.push(`Dieta: ${piano.nome} (in uso dal ${piano.dataInizio})${piano.obiettivoKcal ? `, obiettivo ${piano.obiettivoKcal} kcal/giorno` : ''}`);
-    if (piano.attivitaInclusa) r.push(`Attività già considerata dalla dieta: ${piano.attivitaInclusa}`);
-  } else {
-    r.push('Dieta: nessuna dieta caricata (il saldo considera solo sgarri e attività).');
-  }
+  r.push(piano
+    ? `Dieta: ${piano.nome} (in uso dal ${piano.dataInizio})`
+    : 'Dieta: nessuna dieta caricata (nel mangiato contano solo gli sgarri).');
   r.push(`Metabolismo basale (BIA): ${imp.basale ? imp.basale + ' kcal/giorno' : 'non impostato'} · Peso: ${imp.peso ? fmtNum(imp.peso) + ' kg' : 'non impostato'}`);
-  const tipi = imp.tipiPrevisti.map(k => TIPI_ATTIVITA[k]?.nome).filter(Boolean);
-  r.push(`Attività già prevista nelle impostazioni: ${tipi.length ? tipi.join(', ') : 'nessun tipo'}${imp.attivitaPrevistaKcal ? ` + ${imp.attivitaPrevistaKcal} kcal/giorno` : ''}; conta solo l'attività in più.`);
-  r.push('Saldo del giorno = (kcal della dieta − voci tolte + sgarri) − (obiettivo + attività extra). Positivo = sopra il piano, negativo = sotto.');
+  r.push('Bilancio del giorno = mangiato − consumato. Negativo = deficit, positivo = surplus.');
+  r.push('Mangiato = kcal della dieta (con le alternative scelte) − voci e pasti tolti + sgarri.');
+  r.push('Consumato = metabolismo basale + calorie dei passi + calorie delle attività.');
+  r.push('Passi: vale il totale del giorno inserito per ultimo; se mancano le calorie si stimano con passi × 0,0005 × peso. Dalle calorie dei passi si tolgono quelle di camminate, corse ed escursioni importate da Garmin (i loro passi sono già nel totale), mai sotto zero.');
   r.push(imp.correzioneBasale && imp.basale
-    ? 'Le calorie delle attività sono calorie attive: a quelle di Garmin è tolta la quota del basale (Calorie − basale × ore / 24).'
-    : 'Le calorie delle attività di Garmin sono quelle del file, senza togliere la quota del basale.');
+    ? 'Attività: calorie attive; a quelle di Garmin è tolta la quota del basale (Calorie − basale × ore / 24).'
+    : 'Attività: calorie di Garmin così come sono nel file, senza togliere la quota del basale.');
 
   if (piano) {
     r.push('');
     r.push('== DIETA DI RIFERIMENTO ==');
     piano.giorni.forEach(g => {
-      const ob = g.obiettivoKcal ?? piano.obiettivoKcal;
       const quando = g.giorniSettimana.length ? ' (' + g.giorniSettimana.map(i => GIORNI_BREVI[i]).join(', ') + ')' : '';
-      r.push(`${g.nome}${quando}: ${totaleGiornata(g)} kcal${ob ? `, obiettivo ${ob}` : ''}`);
+      r.push(`${g.nome}${quando}: ${totaleGiornata(g)} kcal`);
       const voce = v => `${v.nome}${v.quantita ? ' ' + v.quantita : ''} ${v.kcal}${v.alternative ? ` [o: ${v.alternative.map(a => `${a.nome} ${a.kcal}`).join(', ')}]` : ''}`;
       g.pasti.forEach(p => {
         r.push(`- ${p.nome} (${totalePasto(p)}): ${p.voci.map(voce).join('; ')}`);
@@ -1691,7 +1803,10 @@ function testoDietaPerClaude(da, a, conAllenamenti) {
   if (!giorni.length) r.push('(nessun giorno conteggiato nel periodo)');
   giorni.forEach(c => {
     const tipo = c.giornata && c.piano.giorni.length > 1 ? ` [${c.giornata.nome}]` : '';
-    r.push(`${fmtGiorno(c.data)}${tipo} – saldo ${fmtSaldo(c.bilancio)} kcal`);
+    r.push(`${fmtGiorno(c.data)}${tipo} – mangiato ${fmtKcal(c.mangiato)}, consumato ${fmtKcal(c.consumato)}, saldo ${fmtSaldo(c.bilancio)} kcal`);
+    const p = c.passi;
+    r.push(`  Consumato: basale ${fmtKcal(c.basale)} + passi ${fmtKcal(p.nette)} + attività ${fmtKcal(c.kcalAttivita)}`
+      + (p.attuale ? ` (passi: ${p.attuale.passi != null ? fmtKcal(p.attuale.passi) : '—'}, ${fmtKcal(p.kcal)} kcal ${p.stimata ? 'stimate' : 'inserite'}${p.aPiedi && p.kcal ? `, −${fmtKcal(Math.min(p.kcal, p.aPiedi))} già nelle attività a piedi` : ''})` : ' (passi non inseriti)'));
     const saltati = c.pasti.filter(p => p.saltato).map(p => `${p.nome} (−${p.totale})`);
     if (saltati.length) r.push(`  Pasti saltati: ${saltati.join(', ')}`);
     if (c.saltatiSenzaDieta.length) r.push(`  Pasti saltati (dieta non ancora caricata): ${c.saltatiSenzaDieta.join(', ')}`);
@@ -1707,9 +1822,8 @@ function testoDietaPerClaude(da, a, conAllenamenti) {
       const sost = s.sostituisce ? c.pasti.find(p => chiave(p.nome) === chiave(s.sostituisce)) : null;
       r.push(`  Sgarro${s.pasto ? ' (' + s.pasto.toLowerCase() + ')' : ''}: ${s.descrizione} – ${s.kcal} kcal${s.kcalMin != null ? ` [${s.kcalMin}–${s.kcalMax}]` : ''}${s.sostituisce ? `, al posto di ${s.sostituisce.toLowerCase()}${sost ? ` (−${sost.totale})` : ''}` : ''}`);
     });
-    c.attivita.forEach(x => r.push(`  Attività: ${TIPI_ATTIVITA[x.a.categoria]?.nome || 'Attività'} ${descrAttivita(x.a)} – ${x.kcal} kcal attive${x.prevista ? ' (già prevista dalla dieta)' : ''}`));
-    if (c.extra) r.push(`  Attività extra conteggiata: ${c.extra} kcal`);
-    if (!saltati.length && !scelte.length && !tolte.length && !c.sgarri.length && !c.attivita.length && !c.saltatiSenzaDieta.length) r.push('  Dieta seguita.');
+    c.attivita.forEach(x => r.push(`  Attività: ${TIPI_ATTIVITA[x.a.categoria]?.nome || 'Attività'} ${descrAttivita(x.a)} – ${x.kcal} kcal attive`));
+    if (!saltati.length && !scelte.length && !tolte.length && !c.sgarri.length && !c.saltatiSenzaDieta.length) r.push('  Dieta seguita.');
   });
 
   if (giorni.length) {
@@ -1718,15 +1832,17 @@ function testoDietaPerClaude(da, a, conAllenamenti) {
     const settimane = new Map();
     giorni.forEach(c => {
       const l = lunediDi(c.data);
-      const s = settimane.get(l) || { n: 0, saldo: 0 };
+      const s = settimane.get(l) || { n: 0, mangiato: 0, consumato: 0, saldo: 0 };
       s.n++;
+      s.mangiato += c.mangiato;
+      s.consumato += c.consumato;
       s.saldo += c.bilancio;
       settimane.set(l, s);
     });
-    settimane.forEach((s, l) => r.push(`Settimana ${fmtGiorno(l)} – ${fmtGiorno(piuGiorni(l, 6))}: ${fmtSaldo(s.saldo)} kcal (${s.n} giorni${s.n < 7 ? ', settimana incompleta' : ''})`));
+    settimane.forEach((s, l) => r.push(`Settimana ${fmtGiorno(l)} – ${fmtGiorno(piuGiorni(l, 6))}: mangiato ${fmtKcal(s.mangiato)}, consumato ${fmtKcal(s.consumato)}, saldo ${fmtSaldo(s.saldo)} kcal (${s.n} giorni${s.n < 7 ? ', settimana incompleta' : ''})`));
     const t = riepilogoPeriodo(giorni);
     r.push('');
-    r.push(`SALDO DEL PERIODO: ${fmtSaldo(t.bilancio)} kcal (sgarri +${fmtKcal(t.sgarri)}, voci e pasti tolti −${fmtKcal(t.tolto)}, attività extra −${fmtKcal(t.extra)}${Math.round(t.scarto) ? `, dieta rispetto all'obiettivo ${fmtSaldo(t.scarto)}` : ''})`);
+    r.push(`TOTALE DEL PERIODO: mangiato ${fmtKcal(t.mangiato)} (dieta ${fmtKcal(t.dieta)} − tolte ${fmtKcal(t.tolto)} + sgarri ${fmtKcal(t.sgarri)}), consumato ${fmtKcal(t.consumato)} (basale ${fmtKcal(t.basale)} + passi ${fmtKcal(t.passi)} + attività ${fmtKcal(t.attivita)}), saldo ${fmtSaldo(t.bilancio)} kcal, media ${fmtSaldo(t.bilancio / t.n)} al giorno.`);
   }
 
   if (conAllenamenti) {
@@ -1752,7 +1868,7 @@ function testoDietaPerClaude(da, a, conAllenamenti) {
   r.push('');
   r.push('Per una nuova dieta rispondi con un unico blocco JSON in questo formato (Dieta → ⚙ → Dieta di riferimento):');
   r.push(jsonCompatto(ESEMPIO_DIETA));
-  r.push('Ogni voce ha nome, kcal (numero) e quantita (testo, facoltativa). giorniSettimana assegna la giornata ai giorni (Lunedì…Domenica); una giornata senza giorniSettimana vale per i giorni rimasti; se la dieta è uguale tutti i giorni basta una giornata senza giorniSettimana. obiettivoKcal (della dieta o della giornata) è il bersaglio calorico: se manca, vale la somma delle voci. attivitaInclusa descrive l\'attività già considerata dalla dieta. Facoltativi: "alternative" su una voce (voci equivalenti, con nome, quantita e kcal) e "alternative" su un pasto (menù interi, ciascuno con nome e voci). Mantieni identici i nomi dei pasti (Colazione, Pranzo…) quando possibile.');
+  r.push('Ogni voce ha nome, kcal (numero) e quantita (testo, facoltativa). giorniSettimana assegna la giornata ai giorni (Lunedì…Domenica); una giornata senza giorniSettimana vale per i giorni rimasti; se la dieta è uguale tutti i giorni basta una giornata senza giorniSettimana. Facoltativi: "alternative" su una voce (voci equivalenti, con nome, quantita e kcal) e "alternative" su un pasto (menù interi, ciascuno con nome e voci). Mantieni identici i nomi dei pasti (Colazione, Pranzo…) quando possibile.');
   return r.join('\n');
 }
 
@@ -1781,11 +1897,11 @@ function campoDieta(el) {
     statoDieta.formAttivita[campo] = v;
     if (campo === 'categoria') { statoDieta.formAttivita.met = ''; render(); }
     else aggiornaStimaAttivita();
+  } else if (gruppo === 'fp') {
+    statoDieta.formPassi[campo] = v;
+    aggiornaStimaPassi();
   } else if (gruppo === 'imp') {
-    if (campo === 'tipo') {
-      const lista = d.impostazioni.tipiPrevisti.filter(x => x !== el.dataset.tipo);
-      d.impostazioni.tipiPrevisti = v ? [...lista, el.dataset.tipo] : lista;
-    } else if (campo === 'inizio') {
+    if (campo === 'inizio') {
       d.impostazioni.inizio = v || null;
     } else if (campo === 'correzioneBasale') {
       d.impostazioni.correzioneBasale = v;
@@ -1851,9 +1967,30 @@ const azioniDieta = {
   'dt-giorno-sposta': b => {
     const g = piuGiorni(giornoMostrato(), Number(b.dataset.d));
     statoDieta.data = g >= oggiISO() ? null : g;
+    statoDieta.formPassi = { id: null, passi: '', kcal: '' };
     render();
   },
-  'dt-oggi': () => { statoDieta.data = null; render(); },
+  'dt-oggi': () => { statoDieta.data = null; statoDieta.formPassi = { id: null, passi: '', kcal: '' }; render(); },
+  'dt-salva-passi': () => salvaPassi(),
+  'dt-annulla-passi': () => { statoDieta.formPassi = { id: null, passi: '', kcal: '' }; render(); },
+  'dt-modifica-passi': b => {
+    const v = (D().passi[giornoMostrato()] || []).find(x => x.id === b.dataset.id);
+    if (!v) return;
+    statoDieta.formPassi = { id: v.id, passi: v.passi != null ? String(v.passi) : '', kcal: v.kcal != null ? String(v.kcal) : '' };
+    render();
+    document.getElementById('form-passi')?.scrollIntoView({ block: 'center' });
+  },
+  'dt-elimina-passi': async b => {
+    const d = D(), data = giornoMostrato();
+    const v = (d.passi[data] || []).find(x => x.id === b.dataset.id);
+    const testo = v && (v.passi != null ? `${fmtKcal(v.passi)} passi` : `${fmtKcal(v.kcal)} kcal`);
+    if (!v || !await chiedi(`Eliminare l'aggiornamento «${testo}»?`, 'Elimina', true)) return;
+    d.passi[data] = d.passi[data].filter(x => x.id !== v.id);
+    if (!d.passi[data].length) delete d.passi[data];
+    if (statoDieta.formPassi.id === v.id) statoDieta.formPassi = { id: null, passi: '', kcal: '' };
+    salva();
+    render();
+  },
   'dt-voce': b => alternaVoce(Number(b.dataset.p), Number(b.dataset.v)),
   'dt-salta': b => alternaPasto(Number(b.dataset.p)),
   'dt-controlla-sgarri': () => controllaSgarri(),
@@ -1878,15 +2015,6 @@ const azioniDieta = {
   },
   'dt-salva-attivita': () => salvaFormAttivita(),
   'dt-annulla-attivita': () => { statoDieta.formAttivita = null; render(); },
-  'dt-prevista': b => {
-    const a = D().attivita.find(x => x.id === b.dataset.id);
-    if (!a) return;
-    const nuovo = !attivitaPrevista(a);
-    delete a.prevista;
-    if (nuovo !== attivitaPrevista(a)) a.prevista = nuovo;
-    salva();
-    render();
-  },
   'dt-elimina-attivita': async b => {
     const d = D();
     const a = d.attivita.find(x => x.id === b.dataset.id);
