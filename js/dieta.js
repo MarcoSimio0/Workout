@@ -45,13 +45,10 @@ const ESEMPIO_DIETA = {
   versione: 1,
   nome: 'Nome della dieta',
   dataInizio: 'AAAA-MM-GG',
-  obiettivoKcal: 2300,
-  attivitaInclusa: '4 allenamenti con i pesi a settimana',
   giorni: [
     {
       nome: 'Allenamento',
       giorniSettimana: ['Lunedì', 'Martedì', 'Giovedì', 'Venerdì'],
-      obiettivoKcal: 2450,
       pasti: [
         { nome: 'Colazione', voci: [{ nome: 'Yogurt greco 0%', quantita: '170 g', kcal: 100, alternative: [{ nome: 'Skyr', quantita: '150 g', kcal: 94 }] }, { nome: "Fiocchi d'avena", quantita: '50 g', kcal: 190 }] },
         { nome: 'Pranzo', voci: [{ nome: 'Riso basmati', quantita: '90 g', kcal: 320 }, { nome: 'Petto di pollo', quantita: '150 g', kcal: 165 }] }
@@ -81,6 +78,7 @@ const statoDieta = {
   ultimoImport: null,
   formSgarro: null,
   formAttivita: null,
+  formPassi: { id: null, passi: '', kcal: '' },
   tutteAttivita: false
 };
 
@@ -94,7 +92,8 @@ function dietaVuota() {
     attivita: [],
     garminScartate: [],   // chiavi delle attività di Garmin eliminate o scartate: non si reimportano
     daVerificare: [],     // attività di Garmin sovrapposte a una inserita a mano
-    impostazioni: { basale: null, peso: null, attivitaPrevistaKcal: 0, tipiPrevisti: ['palestra'], inizio: null, correzioneBasale: true }
+    passi: {},            // 'AAAA-MM-GG': aggiornamenti del totale del giorno; vale l'ultimo
+    impostazioni: { basale: null, peso: null, inizio: null, correzioneBasale: true }
   };
 }
 
@@ -116,9 +115,14 @@ function preparaDieta() {
   const d = dati.dieta, v = dietaVuota();
   for (const k of Object.keys(v)) if (d[k] == null) d[k] = v[k];
   d.impostazioni = Object.assign(v.impostazioni, d.impostazioni);
-  // Versioni precedenti: collegamento a Strava (tolto) e attività da CSV senza chiave.
+  // Versioni precedenti: Strava (tolto), attività da CSV senza chiave, «attività già prevista» (tolta).
   delete d.strava;
-  d.attivita.forEach(a => { if (a.fonte === 'csv') a.fonte = 'garmin'; });
+  delete d.impostazioni.tipiPrevisti;
+  delete d.impostazioni.attivitaPrevistaKcal;
+  d.attivita.forEach(a => {
+    if (a.fonte === 'csv') a.fonte = 'garmin';
+    delete a.prevista;
+  });
   return d;
 }
 
@@ -274,11 +278,6 @@ function validaDieta(o) {
       .map((p, pi) => leggiPasto(p, `${dove}, pasto ${pi + 1}${p?.nome ? ' (' + p.nome + ')' : ''}`, err));
 
     const giornata = { nome: String(g.nome ?? '').trim(), giorniSettimana: sett, pasti };
-    if (g.obiettivoKcal != null && g.obiettivoKcal !== '') {
-      const ob = leggiKcal(g.obiettivoKcal);
-      if (ob == null || ob <= 0) err.push(`${dove}: "obiettivoKcal" deve essere un numero.`);
-      else giornata.obiettivoKcal = Math.round(ob);
-    }
     if (g.note) giornata.note = String(g.note);
     return giornata;
   });
@@ -287,12 +286,6 @@ function validaDieta(o) {
   if (giorni.length && giorni.every(g => g.giorniSettimana.length)) {
     const mancanti = [1, 2, 3, 4, 5, 6, 0].filter(i => !assegnati.has(i)).map(i => GIORNI_SETTIMANA[i]);
     if (mancanti.length) err.push(`Nessuna giornata per: ${mancanti.join(', ')}. Aggiungili a "giorniSettimana" oppure lascia una giornata senza "giorniSettimana", che vale per i giorni rimasti.`);
-  }
-
-  let obiettivo = null;
-  if (o.obiettivoKcal != null && o.obiettivoKcal !== '') {
-    obiettivo = leggiKcal(o.obiettivoKcal);
-    if (obiettivo == null || obiettivo <= 0) err.push('"obiettivoKcal" deve essere un numero.');
   }
 
   if (err.length) {
@@ -306,20 +299,16 @@ function validaDieta(o) {
     nome: String(o.nome || 'Dieta'),
     dataInizio: leggiData(o.dataInizio) || oggiISO(),
     note: o.note ? String(o.note) : '',
-    attivitaInclusa: o.attivitaInclusa ? String(o.attivitaInclusa) : '',
     giorni
   };
-  if (obiettivo) piano.obiettivoKcal = Math.round(obiettivo);
 
-  // Basale, peso e attività già prevista, se il file li contiene: vanno nelle impostazioni.
+  // Basale e peso, se il file li contiene: vanno nelle impostazioni.
   const imp = o.impostazioni && typeof o.impostazioni === 'object' ? o.impostazioni : {};
   const impostazioni = {};
   const basale = leggiKcal(imp.metabolismoBasale ?? imp.basale);
   if (basale > 0) impostazioni.basale = Math.round(basale);
   const peso = leggiDecimale(imp.pesoKg ?? imp.peso);
   if (peso > 0) impostazioni.peso = peso;
-  const attivita = leggiKcal(imp.attivitaGiaInclusa ?? imp.attivitaPrevistaKcal);
-  if (attivita != null && attivita >= 0) impostazioni.attivitaPrevistaKcal = Math.round(attivita);
   if (Object.keys(impostazioni).length) piano.impostazioni = impostazioni;
   return piano;
 }
@@ -353,7 +342,30 @@ function inizioMonitoraggio() {
   return date.length ? date.reduce((a, b) => (a < b ? a : b)) : oggiISO();
 }
 
-const attivitaPrevista = a => a.prevista ?? D().impostazioni.tipiPrevisti.includes(a.categoria);
+// Attività con passi: i loro passi sono già nel totale del giorno di Garmin.
+const A_PIEDI = ['camminata', 'corsa', 'escursione'];
+const KCAL_PER_PASSO_KG = 0.0005;
+
+const stimaKcalPassi = (passi, peso) => Math.round(passi * KCAL_PER_PASSO_KG * peso);
+
+// Passi del giorno: vale l'ultimo aggiornamento inserito (totale progressivo, come su Garmin).
+function passiDel(data) {
+  const d = D();
+  const voci = [...(d.passi[data] || [])].sort((a, b) => b.registratoIl.localeCompare(a.registratoIl));
+  const attuale = voci[0] || null;
+  const peso = d.impostazioni.peso;
+  let kcal = 0, stimata = false;
+  if (attuale?.kcal != null) kcal = attuale.kcal;
+  else if (attuale?.passi != null && peso) { kcal = stimaKcalPassi(attuale.passi, peso); stimata = true; }
+  // Le calorie di camminate e corse importate sono già contate come attività: si tolgono dai passi.
+  const aPiedi = d.attivita.filter(a => a.data === data && a.fonte === 'garmin' && A_PIEDI.includes(a.categoria))
+    .reduce((n, a) => n + kcalAttive(a), 0);
+  return {
+    voci, attuale, kcal, stimata, aPiedi,
+    nette: Math.max(0, kcal - aPiedi),
+    senzaPeso: !!attuale && attuale.kcal == null && !peso
+  };
+}
 
 function calcolaGiorno(data) {
   const d = D();
@@ -394,19 +406,21 @@ function calcolaGiorno(data) {
 
   const attivita = d.attivita.filter(a => a.data === data)
     .sort((a, b) => (a.ora || '').localeCompare(b.ora || ''))
-    .map(a => ({ a, kcal: kcalAttive(a), prevista: attivitaPrevista(a) }));
-  const kcalAttivita = attivita.filter(x => !x.prevista).reduce((n, x) => n + x.kcal, 0);
-  const extra = Math.max(0, kcalAttivita - (d.impostazioni.attivitaPrevistaKcal || 0));
+    .map(a => ({ a, kcal: kcalAttive(a) }));
+  const kcalAttivita = attivita.reduce((n, x) => n + x.kcal, 0);
   const kcalSgarri = sgarri.reduce((n, s) => n + s.kcal, 0);
-  const obiettivo = giornata ? (giornata.obiettivoKcal ?? piano.obiettivoKcal ?? dietaBase) : 0;
+  const passi = passiDel(data);
+  const basale = d.impostazioni.basale || 0;
 
+  // Bilancio assoluto: calorie mangiate − calorie consumate.
+  const mangiato = dieta - tolto + kcalSgarri;
+  const consumato = basale + passi.nette + kcalAttivita;
   return {
-    data, piano, giornata, pasti, sgarri, attivita, sostituzioniMancanti,
+    data, piano, giornata, pasti, sgarri, attivita, sostituzioniMancanti, passi,
     saltatiSenzaDieta: piano ? [] : [...saltati],
-    dieta, dietaBase, scambi: dieta - dietaBase, tolto, kcalSgarri, kcalAttivita, extra, obiettivo,
-    mangiato: dieta - tolto + kcalSgarri,
-    bersaglio: obiettivo + extra,
-    bilancio: dieta - tolto + kcalSgarri - (obiettivo + extra)
+    dieta, dietaBase, scambi: dieta - dietaBase, tolto, kcalSgarri, kcalAttivita, basale,
+    mangiato, consumato,
+    bilancio: mangiato - consumato
   };
 }
 
@@ -514,14 +528,17 @@ function serieBilancio(tipo, da, a) {
 }
 
 function riepilogoPeriodo(giorni) {
-  const t = { n: giorni.length, sgarri: 0, nSgarri: 0, tolto: 0, extra: 0, attivita: 0, scarto: 0, bilancio: 0 };
+  const t = { n: giorni.length, dieta: 0, tolto: 0, sgarri: 0, nSgarri: 0, mangiato: 0, basale: 0, passi: 0, attivita: 0, consumato: 0, bilancio: 0 };
   giorni.forEach(c => {
+    t.dieta += c.dieta;
+    t.tolto += c.tolto;
     t.sgarri += c.kcalSgarri;
     t.nSgarri += c.sgarri.length;
-    t.tolto += c.tolto;
-    t.extra += c.extra;
+    t.mangiato += c.mangiato;
+    t.basale += c.basale;
+    t.passi += c.passi.nette;
     t.attivita += c.kcalAttivita;
-    t.scarto += c.dieta - c.obiettivo;
+    t.consumato += c.consumato;
     t.bilancio += c.bilancio;
   });
   return t;
