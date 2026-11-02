@@ -236,6 +236,9 @@ details.seduta[open] summary { margin-bottom: 8px; }
 .dt-voce.tolta { color: var(--muto); text-decoration: line-through; }
 .dt-voce:disabled { cursor: default; }
 .dt-voce .kcal { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dt-alt { display: flex; align-items: center; gap: 6px; margin: -4px 0 8px; font-size: 13px; color: var(--muto); }
+.dt-alt.menu { margin: 8px 0 2px; }
+.dt-alt select { flex: 1; min-width: 0; padding: 5px 8px; font-size: 13px; color: var(--muto); background: transparent; border-radius: 8px; }
 .dt-riga { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 10px 0; border-top: 1px solid var(--bordo); }
 .card > h3 + .dt-riga, .card > .dt-riga:first-child, .nota + .dt-riga { border-top: 0; }
 .dt-riga-azioni { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }

@@ -53,7 +53,7 @@ const ESEMPIO_DIETA = {
       giorniSettimana: ['Lunedì', 'Martedì', 'Giovedì', 'Venerdì'],
       obiettivoKcal: 2450,
       pasti: [
-        { nome: 'Colazione', voci: [{ nome: 'Yogurt greco 0%', quantita: '170 g', kcal: 100 }, { nome: "Fiocchi d'avena", quantita: '50 g', kcal: 190 }] },
+        { nome: 'Colazione', voci: [{ nome: 'Yogurt greco 0%', quantita: '170 g', kcal: 100, alternative: [{ nome: 'Skyr', quantita: '150 g', kcal: 94 }] }, { nome: "Fiocchi d'avena", quantita: '50 g', kcal: 190 }] },
         { nome: 'Pranzo', voci: [{ nome: 'Riso basmati', quantita: '90 g', kcal: 320 }, { nome: 'Petto di pollo', quantita: '150 g', kcal: 165 }] }
       ]
     },
@@ -217,10 +217,48 @@ function giornoSettimanaDa(t) {
   return ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'].findIndex(p => n.startsWith(p));
 }
 
+// "quantita", oppure "grammi" e "misura" (formato usato anche da altre chat di Claude)
+function quantitaDa(v) {
+  if (v.quantita != null && v.quantita !== '') return String(v.quantita);
+  const g = leggiDecimale(v.grammi);
+  const parti = [g ? fmtNum(g) + ' g' : '', v.misura ? String(v.misura) : ''].filter(Boolean);
+  return parti.length === 2 ? `${parti[0]} (${parti[1]})` : parti[0] || '';
+}
+
+function leggiVoce(vRaw, dove, err, conAlternative = true) {
+  const v = vRaw || {};
+  if (!v.nome) err.push(`${dove}: manca "nome".`);
+  const kcal = leggiKcal(v.kcal);
+  if (kcal == null || kcal < 0) err.push(`${dove}: "kcal" deve essere un numero.`);
+  const voce = { nome: String(v.nome ?? '').trim(), kcal: Math.round(kcal ?? 0) };
+  const q = quantitaDa(v);
+  if (q) voce.quantita = q;
+  if (conAlternative && Array.isArray(v.alternative) && v.alternative.length) {
+    voce.alternative = v.alternative.map((a, k) => leggiVoce(a, `${dove}, alternativa ${k + 1}`, err, false));
+  }
+  return voce;
+}
+
+function leggiPasto(pRaw, dove, err, conAlternative = true) {
+  const p = pRaw || {};
+  if (!p.nome) err.push(`${dove}: manca "nome".`);
+  if (!Array.isArray(p.voci) || !p.voci.length) err.push(`${dove}: serve almeno una voce in "voci".`);
+  const pasto = {
+    nome: String(p.nome ?? '').trim(),
+    voci: (Array.isArray(p.voci) ? p.voci : []).map((v, vi) => leggiVoce(v, `${dove}, voce ${vi + 1}${v?.nome ? ' (' + v.nome + ')' : ''}`, err))
+  };
+  // Menù alternativi per l'intero pasto ("alternativeIntere" nei piani di altre chat).
+  const alternative = p.alternative || p.alternativeIntere;
+  if (conAlternative && Array.isArray(alternative) && alternative.length) {
+    pasto.alternative = alternative.map((a, k) => leggiPasto(a, `${dove}, alternativa ${k + 1}`, err, false));
+  }
+  return pasto;
+}
+
 function validaDieta(o) {
   const err = [];
   if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error('Il contenuto non è un oggetto JSON.');
-  if (o.formato !== 'dieta-palestra') err.push('Il campo "formato" deve essere "dieta-palestra".');
+  if (o.formato !== 'dieta-palestra' && o.formato !== 'dieta') err.push('Il campo "formato" deve essere "dieta-palestra".');
   let giorniRaw = Array.isArray(o.giorni) ? o.giorni : null;
   if (!giorniRaw && Array.isArray(o.pasti)) giorniRaw = [{ nome: 'Tutti i giorni', pasti: o.pasti }];
   if (!giorniRaw || !giorniRaw.length) err.push('Serve almeno una giornata in "giorni" (oppure "pasti" se la dieta è uguale tutti i giorni).');
@@ -231,8 +269,9 @@ function validaDieta(o) {
     const dove = `Giornata ${gi + 1}${g.nome ? ' (' + g.nome + ')' : ''}`;
     if (!g.nome) err.push(`${dove}: manca "nome".`);
     const sett = [];
-    if (g.giorniSettimana != null) {
-      (Array.isArray(g.giorniSettimana) ? g.giorniSettimana : [g.giorniSettimana]).forEach(x => {
+    const giorniSett = g.giorniSettimana ?? g.giornoSettimana;
+    if (giorniSett != null && giorniSett !== '') {
+      (Array.isArray(giorniSett) ? giorniSett : [giorniSett]).forEach(x => {
         const i = giornoSettimanaDa(x);
         if (i < 0) err.push(`${dove}: giorno della settimana "${x}" non riconosciuto.`);
         else if (assegnati.has(i)) err.push(`${dove}: ${GIORNI_SETTIMANA[i]} è già assegnato a «${assegnati.get(i)}».`);
@@ -241,23 +280,8 @@ function validaDieta(o) {
     }
     if (!Array.isArray(g.pasti) || !g.pasti.length) err.push(`${dove}: serve almeno un pasto in "pasti".`);
 
-    const pasti = (Array.isArray(g.pasti) ? g.pasti : []).map((pRaw, pi) => {
-      const p = pRaw || {};
-      const dp = `${dove}, pasto ${pi + 1}${p.nome ? ' (' + p.nome + ')' : ''}`;
-      if (!p.nome) err.push(`${dp}: manca "nome".`);
-      if (!Array.isArray(p.voci) || !p.voci.length) err.push(`${dp}: serve almeno una voce in "voci".`);
-      const voci = (Array.isArray(p.voci) ? p.voci : []).map((vRaw, vi) => {
-        const v = vRaw || {};
-        const dv = `${dp}, voce ${vi + 1}${v.nome ? ' (' + v.nome + ')' : ''}`;
-        if (!v.nome) err.push(`${dv}: manca "nome".`);
-        const kcal = leggiKcal(v.kcal);
-        if (kcal == null || kcal < 0) err.push(`${dv}: "kcal" deve essere un numero.`);
-        const voce = { nome: String(v.nome ?? '').trim(), kcal: Math.round(kcal ?? 0) };
-        if (v.quantita != null && v.quantita !== '') voce.quantita = String(v.quantita);
-        return voce;
-      });
-      return { nome: String(p.nome ?? '').trim(), voci };
-    });
+    const pasti = (Array.isArray(g.pasti) ? g.pasti : [])
+      .map((p, pi) => leggiPasto(p, `${dove}, pasto ${pi + 1}${p?.nome ? ' (' + p.nome + ')' : ''}`, err));
 
     const giornata = { nome: String(g.nome ?? '').trim(), giorniSettimana: sett, pasti };
     if (g.obiettivoKcal != null && g.obiettivoKcal !== '') {
@@ -296,10 +320,22 @@ function validaDieta(o) {
     giorni
   };
   if (obiettivo) piano.obiettivoKcal = Math.round(obiettivo);
+
+  // Basale, peso e attività già prevista, se il file li contiene: vanno nelle impostazioni.
+  const imp = o.impostazioni && typeof o.impostazioni === 'object' ? o.impostazioni : {};
+  const impostazioni = {};
+  const basale = leggiKcal(imp.metabolismoBasale ?? imp.basale);
+  if (basale > 0) impostazioni.basale = Math.round(basale);
+  const peso = leggiDecimale(imp.pesoKg ?? imp.peso);
+  if (peso > 0) impostazioni.peso = peso;
+  const attivita = leggiKcal(imp.attivitaGiaInclusa ?? imp.attivitaPrevistaKcal);
+  if (attivita != null && attivita >= 0) impostazioni.attivitaPrevistaKcal = Math.round(attivita);
+  if (Object.keys(impostazioni).length) piano.impostazioni = impostazioni;
   return piano;
 }
 
-const totaleGiornata = g => g.pasti.reduce((n, p) => n + p.voci.reduce((m, v) => m + v.kcal, 0), 0);
+const totalePasto = p => p.voci.reduce((n, v) => n + v.kcal, 0);
+const totaleGiornata = g => g.pasti.reduce((n, p) => n + totalePasto(p), 0);
 
 // ===================== Calcolo del giorno =====================
 
@@ -340,17 +376,28 @@ function calcolaGiorno(data) {
   const saltati = new Set(rec.saltati || []);
   const tolte = new Set(rec.tolte || []);
 
-  let dieta = 0, tolto = 0;
-  const pasti = (giornata?.pasti || []).map(p => {
-    const k = chiave(p.nome);
-    const totale = p.voci.reduce((n, v) => n + v.kcal, 0);
+  const scelte = rec.scelte || {}, menu = rec.menu || {};
+
+  // dieta = con le alternative scelte nel giorno; dietaBase = come scritta nel piano.
+  let dieta = 0, dietaBase = 0, tolto = 0;
+  const pasti = (giornata?.pasti || []).map(pPiano => {
+    const k = chiave(pPiano.nome);
+    const alt = menu[k] ? pPiano.alternative?.find(a => chiave(a.nome) === chiave(menu[k])) : null;
+    const voci = (alt || pPiano).voci.map(v => {
+      const kv = chiaveVoce(pPiano.nome, v.nome);
+      const scelta = scelte[kv] ? v.alternative?.find(a => chiave(a.nome) === chiave(scelte[kv])) : null;
+      const usata = scelta || v;
+      return { nome: usata.nome, quantita: usata.quantita, kcal: usata.kcal, piano: v, scelta: scelta?.nome || '', tolta: tolte.has(kv) };
+    });
+    const totale = voci.reduce((n, v) => n + v.kcal, 0);
+    const base = pPiano.voci.reduce((n, v) => n + v.kcal, 0);
     const sostituitoDa = sostituiti.get(k) || null;
     const saltato = saltati.has(k);
-    const voci = p.voci.map(v => ({ ...v, tolta: tolte.has(chiaveVoce(p.nome, v.nome)) }));
     const meno = saltato || sostituitoDa ? totale : voci.filter(v => v.tolta).reduce((n, v) => n + v.kcal, 0);
     dieta += totale;
+    dietaBase += base;
     tolto += meno;
-    return { nome: p.nome, totale, voci, saltato, sostituitoDa, meno };
+    return { nome: pPiano.nome, totale, base, voci, saltato, sostituitoDa, meno, alternative: pPiano.alternative || null, menu: alt?.nome || '' };
   });
   const nomiPasti = new Set(pasti.map(p => chiave(p.nome)));
   const sostituzioniMancanti = piano ? sgarri.filter(s => s.sostituisce && !nomiPasti.has(chiave(s.sostituisce))) : [];
@@ -361,12 +408,12 @@ function calcolaGiorno(data) {
   const kcalAttivita = attivita.filter(x => !x.prevista).reduce((n, x) => n + x.kcal, 0);
   const extra = Math.max(0, kcalAttivita - (d.impostazioni.attivitaPrevistaKcal || 0));
   const kcalSgarri = sgarri.reduce((n, s) => n + s.kcal, 0);
-  const obiettivo = giornata ? (giornata.obiettivoKcal ?? piano.obiettivoKcal ?? dieta) : 0;
+  const obiettivo = giornata ? (giornata.obiettivoKcal ?? piano.obiettivoKcal ?? dietaBase) : 0;
 
   return {
     data, piano, giornata, pasti, sgarri, attivita, sostituzioniMancanti,
     saltatiSenzaDieta: piano ? [] : [...saltati],
-    dieta, tolto, kcalSgarri, kcalAttivita, extra, obiettivo,
+    dieta, dietaBase, scambi: dieta - dietaBase, tolto, kcalSgarri, kcalAttivita, extra, obiettivo,
     mangiato: dieta - tolto + kcalSgarri,
     bersaglio: obiettivo + extra,
     bilancio: dieta - tolto + kcalSgarri - (obiettivo + extra)
@@ -383,6 +430,7 @@ function pulisciGiorno(data) {
   const rec = D().giorni[data];
   if (!rec) return;
   for (const k of ['tolte', 'saltati']) if (rec[k] && !rec[k].length) delete rec[k];
+  for (const k of ['scelte', 'menu']) if (rec[k] && !Object.keys(rec[k]).length) delete rec[k];
   if (!Object.keys(rec).length) delete D().giorni[data];
 }
 
@@ -396,7 +444,7 @@ function alternaVoce(pi, vi) {
   const v = p?.voci[vi];
   if (!v) return;
   const rec = recGiorno(data);
-  rec.tolte = alterna(rec.tolte || [], chiaveVoce(p.nome, v.nome));
+  rec.tolte = alterna(rec.tolte || [], chiaveVoce(p.nome, v.piano.nome));
   pulisciGiorno(data);
   salva();
   render();
@@ -1144,7 +1192,8 @@ function contoGiorno(c) {
   const riga = (t, v, cls = '') => `<span class="${cls}">${t}</span><span class="${cls}">${v}</span>`;
   return `
     <div class="dt-conto">
-      ${riga('Dieta prevista', fmtKcal(c.dieta))}
+      ${riga('Dieta prevista', fmtKcal(c.dietaBase))}
+      ${c.scambi ? riga('Alternative scelte', fmtSaldo(c.scambi)) : ''}
       ${riga('Voci e pasti tolti', '−' + fmtKcal(c.tolto))}
       ${riga('Sgarri', '+' + fmtKcal(c.kcalSgarri))}
       ${riga('Mangiato (stima)', fmtKcal(c.mangiato), 'totale')}
@@ -1272,12 +1321,27 @@ function htmlGiorno() {
           ${p.sostituitoDa ? '' : `<button class="btn" data-azione="dt-salta" data-p="${pi}">${p.saltato ? 'Ripristina' : 'Salta'}</button>`}
         </div>
         ${p.sostituitoDa ? `<div class="nota">Al suo posto lo sgarro: ${esc(p.sostituitoDa.descrizione)}</div>` : ''}
+        ${p.alternative ? `
+          <label class="dt-alt menu"><span>Menù</span>
+            <select data-dt="menu" data-p="${pi}"${fermo(p) ? ' disabled' : ''}>
+              <option value="">come da piano · ${fmtKcal(p.base)} kcal</option>
+              ${p.alternative.map(a => `<option value="${esc(a.nome)}"${a.nome === p.menu ? ' selected' : ''}>${esc(a.nome)} · ${fmtKcal(totalePasto(a))} kcal</option>`).join('')}
+            </select>
+          </label>` : ''}
         <ul class="dt-voci">
           ${p.voci.map((v, vi) => `
             <li><button class="dt-voce${v.tolta || fermo(p) ? ' tolta' : ''}" data-azione="dt-voce" data-p="${pi}" data-v="${vi}"${fermo(p) ? ' disabled' : ''}>
               <span>${esc(v.nome)}${v.quantita ? ` <span class="muto">${esc(v.quantita)}</span>` : ''}</span>
               <span class="kcal">${fmtKcal(v.kcal)}</span>
-            </button></li>`).join('')}
+            </button>
+            ${v.piano.alternative ? `
+              <label class="dt-alt"><span>⇄</span>
+                <select data-dt="scelta" data-p="${pi}" data-v="${vi}"${v.tolta || fermo(p) ? ' disabled' : ''} aria-label="Alternative a ${esc(v.piano.nome)}">
+                  <option value="">come da piano${v.scelta ? `: ${esc(v.piano.nome)} · ${fmtKcal(v.piano.kcal)} kcal` : ` · ${v.piano.alternative.length} ${v.piano.alternative.length === 1 ? 'alternativa' : 'alternative'}`}</option>
+                  ${v.piano.alternative.map(a => `<option value="${esc(a.nome)}"${a.nome === v.scelta ? ' selected' : ''}>${esc(a.nome)}${a.quantita ? ' ' + esc(a.quantita) : ''} · ${fmtKcal(a.kcal)} kcal</option>`).join('')}
+                </select>
+              </label>` : ''}
+            </li>`).join('')}
         </ul>
       </section>`).join('')}
     ${c.sostituzioniMancanti.map(s => `<div class="nota">Lo sgarro «${esc(s.descrizione)}» sostituisce «${esc(s.sostituisce)}», che non c'è nella dieta: se serve, segna tu il pasto come saltato.</div>`).join('')}
@@ -1424,6 +1488,7 @@ function htmlAttivita() {
 
 function dettagliBrevi(c) {
   return [
+    c.scambi ? `alternative ${fmtSaldo(c.scambi)}` : '',
     c.kcalSgarri ? `sgarri +${fmtKcal(c.kcalSgarri)}` : '',
     c.tolto ? `tolte −${fmtKcal(c.tolto)}` : '',
     c.extra ? `attività −${fmtKcal(c.extra)}` : ''
@@ -1576,8 +1641,15 @@ function htmlImpostazioni() {
   let anteprima = '';
   if (attesa?.errore) anteprima = `<div class="nota errore-testo">${esc(attesa.errore)}</div>`;
   else if (attesa) {
+    const ip = attesa.piano.impostazioni;
+    const daImpostare = ip ? [
+      ip.basale ? `basale ${fmtKcal(ip.basale)} kcal` : '',
+      ip.peso ? `peso ${fmtNum(ip.peso)} kg` : '',
+      ip.attivitaPrevistaKcal != null ? `attività già prevista ${fmtKcal(ip.attivitaPrevistaKcal)} kcal/giorno` : ''
+    ].filter(Boolean).join(', ') : '';
     anteprima = `
       <div class="nota">${htmlPiano(attesa.piano)}</div>
+      ${daImpostare ? `<p class="muto piccolo">Imposta anche: ${daImpostare}.</p>` : ''}
       ${d.piani.length ? '' : '<p class="muto piccolo">È la prima dieta: vale anche per i giorni già segnati prima della data di inizio.</p>'}
       ${d.piani.some(p => p.dataInizio === attesa.piano.dataInizio) ? '<p class="muto piccolo">Sostituisce la dieta che inizia nello stesso giorno.</p>' : ''}
       <div class="riga-bottoni"><button class="btn primario" data-azione="dt-usa-dieta">Usa questa dieta</button></div>`;
@@ -1641,8 +1713,10 @@ function usaDieta() {
   const p = statoDieta.dietaInAttesa?.piano;
   if (!p) return;
   const d = D();
+  const { impostazioni, ...piano } = p;
+  if (impostazioni) Object.assign(d.impostazioni, impostazioni);
   d.piani = d.piani.filter(x => x.dataInizio !== p.dataInizio);
-  d.piani.push({ ...p, id: nuovoId(), importataIl: new Date().toISOString() });
+  d.piani.push({ ...piano, id: nuovoId(), importataIl: new Date().toISOString() });
   d.piani.sort((a, b) => a.dataInizio.localeCompare(b.dataInizio));
   statoDieta.dietaInAttesa = null;
   statoDieta.testoDieta = '';
@@ -1701,7 +1775,11 @@ function testoDietaPerClaude(da, a, conAllenamenti) {
       const ob = g.obiettivoKcal ?? piano.obiettivoKcal;
       const quando = g.giorniSettimana.length ? ' (' + g.giorniSettimana.map(i => GIORNI_BREVI[i]).join(', ') + ')' : '';
       r.push(`${g.nome}${quando}: ${totaleGiornata(g)} kcal${ob ? `, obiettivo ${ob}` : ''}`);
-      g.pasti.forEach(p => r.push(`- ${p.nome} (${p.voci.reduce((n, v) => n + v.kcal, 0)}): ${p.voci.map(v => `${v.nome}${v.quantita ? ' ' + v.quantita : ''} ${v.kcal}`).join('; ')}`));
+      const voce = v => `${v.nome}${v.quantita ? ' ' + v.quantita : ''} ${v.kcal}${v.alternative ? ` [o: ${v.alternative.map(a => `${a.nome} ${a.kcal}`).join(', ')}]` : ''}`;
+      g.pasti.forEach(p => {
+        r.push(`- ${p.nome} (${totalePasto(p)}): ${p.voci.map(voce).join('; ')}`);
+        (p.alternative || []).forEach(a => r.push(`  oppure ${a.nome} (${totalePasto(a)}): ${a.voci.map(voce).join('; ')}`));
+      });
     });
   }
 
@@ -1714,6 +1792,11 @@ function testoDietaPerClaude(da, a, conAllenamenti) {
     const saltati = c.pasti.filter(p => p.saltato).map(p => `${p.nome} (−${p.totale})`);
     if (saltati.length) r.push(`  Pasti saltati: ${saltati.join(', ')}`);
     if (c.saltatiSenzaDieta.length) r.push(`  Pasti saltati (dieta non ancora caricata): ${c.saltatiSenzaDieta.join(', ')}`);
+    const scelte = [
+      ...c.pasti.filter(p => p.menu).map(p => `${p.nome}: ${p.menu} (${fmtSaldo(p.totale - p.base)})`),
+      ...c.pasti.flatMap(p => p.voci.filter(v => v.scelta).map(v => `${v.nome} al posto di ${v.piano.nome} (${fmtSaldo(v.kcal - v.piano.kcal)})`))
+    ];
+    if (scelte.length) r.push(`  Alternative scelte: ${scelte.join(', ')}`);
     const tolte = c.pasti.filter(p => !p.saltato && !p.sostituitoDa)
       .flatMap(p => p.voci.filter(v => v.tolta).map(v => `${v.nome} a ${p.nome.toLowerCase()} (−${v.kcal})`));
     if (tolte.length) r.push(`  Voci tolte: ${tolte.join(', ')}`);
@@ -1723,7 +1806,7 @@ function testoDietaPerClaude(da, a, conAllenamenti) {
     });
     c.attivita.forEach(x => r.push(`  Attività: ${TIPI_ATTIVITA[x.a.categoria]?.nome || 'Attività'} ${descrAttivita(x.a)} – ${x.kcal} kcal attive${x.prevista ? ' (già prevista dalla dieta)' : ''}`));
     if (c.extra) r.push(`  Attività extra conteggiata: ${c.extra} kcal`);
-    if (!saltati.length && !tolte.length && !c.sgarri.length && !c.attivita.length && !c.saltatiSenzaDieta.length) r.push('  Dieta seguita.');
+    if (!saltati.length && !scelte.length && !tolte.length && !c.sgarri.length && !c.attivita.length && !c.saltatiSenzaDieta.length) r.push('  Dieta seguita.');
   });
 
   if (giorni.length) {
@@ -1766,7 +1849,7 @@ function testoDietaPerClaude(da, a, conAllenamenti) {
   r.push('');
   r.push('Per una nuova dieta rispondi con un unico blocco JSON in questo formato (Dieta → ⚙ → Dieta di riferimento):');
   r.push(jsonCompatto(ESEMPIO_DIETA));
-  r.push('Ogni voce ha nome, kcal (numero) e quantita (testo, facoltativa). giorniSettimana assegna la giornata ai giorni (Lunedì…Domenica); una giornata senza giorniSettimana vale per i giorni rimasti; se la dieta è uguale tutti i giorni basta una giornata senza giorniSettimana. obiettivoKcal (della dieta o della giornata) è il bersaglio calorico: se manca, vale la somma delle voci. attivitaInclusa descrive l\'attività già considerata dalla dieta. Mantieni identici i nomi dei pasti (Colazione, Pranzo…) quando possibile.');
+  r.push('Ogni voce ha nome, kcal (numero) e quantita (testo, facoltativa). giorniSettimana assegna la giornata ai giorni (Lunedì…Domenica); una giornata senza giorniSettimana vale per i giorni rimasti; se la dieta è uguale tutti i giorni basta una giornata senza giorniSettimana. obiettivoKcal (della dieta o della giornata) è il bersaglio calorico: se manca, vale la somma delle voci. attivitaInclusa descrive l\'attività già considerata dalla dieta. Facoltativi: "alternative" su una voce (voci equivalenti, con nome, quantita e kcal) e "alternative" su un pasto (menù interi, ciascuno con nome e voci). Mantieni identici i nomi dei pasti (Colazione, Pranzo…) quando possibile.');
   return r.join('\n');
 }
 
@@ -1811,6 +1894,20 @@ function campoDieta(el) {
     statoDieta.testoDieta = v;
   } else if (k === 'giornata') {
     recGiorno(giornoMostrato()).giornata = v;
+    salva();
+    render();
+  } else if (k === 'scelta' || k === 'menu') {
+    // Alternativa scelta per una voce, o menù alternativo per un pasto intero, solo in quel giorno.
+    const data = giornoMostrato();
+    const p = calcolaGiorno(data).pasti[el.dataset.p];
+    if (!p) return;
+    const rec = recGiorno(data);
+    const dove = k === 'menu' ? 'menu' : 'scelte';
+    const kv = k === 'menu' ? chiave(p.nome) : chiaveVoce(p.nome, p.voci[el.dataset.v].piano.nome);
+    rec[dove] = { ...(rec[dove] || {}) };
+    if (v) rec[dove][kv] = v;
+    else delete rec[dove][kv];
+    pulisciGiorno(data);
     salva();
     render();
   } else if (k === 'export-periodo' || k === 'export-allenamenti') {

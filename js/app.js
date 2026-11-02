@@ -1,6 +1,6 @@
 'use strict';
 
-const VERSIONE_APP = '1.4';
+const VERSIONE_APP = '1.5';
 const GIRI_BIP = 4;
 const CHIAVE = 'scheda-palestra-dati';
 const GIORNI_SETTIMANA = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];

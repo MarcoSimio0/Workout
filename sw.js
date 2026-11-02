@@ -1,6 +1,6 @@
 // Service worker: rende l'app disponibile offline.
 // Quando modifichi i file dell'app, aumenta il numero di versione qui sotto.
-const CACHE = 'scheda-palestra-v5';
+const CACHE = 'scheda-palestra-v6';
 
 const FILE = [
   './',
@@ -15,8 +15,12 @@ const FILE = [
   './icons/icon-maskable-512.png'
 ];
 
+// cache: 'reload' scavalca la cache del browser: dopo un aggiornamento arrivano
+// tutti i file nuovi, mai un misto di vecchi e nuovi.
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILE)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE)
+    .then(c => c.addAll(FILE.map(f => new Request(f, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -42,7 +46,7 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(caches.open(CACHE).then(async cache => {
     const inCache = await cache.match(e.request, { ignoreSearch: true });
-    const daRete = fetch(e.request)
+    const daRete = fetch(e.request, { cache: 'no-cache' })
       .then(r => { if (r.ok) cache.put(e.request, r.clone()); return r; })
       .catch(() => null);
     if (inCache) {

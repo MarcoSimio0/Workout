@@ -86,6 +86,33 @@ Nell'app, per un singolo giorno, puoi scegliere un'altra giornata tipo
 | voce `kcal` | sì | Calorie della voce (numero). |
 | voce `quantita` | no | Testo libero, es. `"90 g"`. |
 
+### Alternative
+
+Facoltative, per i piani che indicano alimenti equivalenti:
+
+- su una **voce**: `"alternative": [{ "nome": "Skyr", "quantita": "150 g", "kcal": 94 }, …]`;
+- su un **pasto** (menù intero diverso): `"alternative": [{ "nome": "Colazione salata", "voci": [ … ] }, …]`.
+
+Nella vista Giorno, sotto la voce o il pasto, compare un menu ⇄ per scegliere
+l'alternativa di quel giorno. L'obiettivo resta quello del piano, quindi la
+differenza di kcal dell'alternativa entra nel saldo.
+
+### Altri nomi accettati
+
+L'app legge anche i piani scritti in un formato leggermente diverso, come
+quelli preparati in altre chat:
+
+| Scritto così | Vale come |
+|---|---|
+| `"formato": "dieta"` | `"formato": "dieta-palestra"` |
+| `"giornoSettimana": "Lunedì"` | `"giorniSettimana": ["Lunedì"]` |
+| `"grammi": 250, "misura": "una tazza"` | `"quantita": "250 g (una tazza)"` |
+| `"alternativeIntere"` su un pasto | `"alternative"` su un pasto |
+| `"impostazioni": { "metabolismoBasale", "pesoKg", "attivitaGiaInclusa" }` | basale, peso e kcal di attività già prevista, impostati all'importazione |
+
+I campi che l'app non usa (per esempio i totali `kcal` dei pasti e `kcalTotali`
+dei giorni) vengono ignorati: i totali li calcola lei dalle voci.
+
 ### Più diete nel tempo
 
 Ogni dieta importata resta salvata. Ogni giorno usa la dieta in vigore in

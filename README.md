@@ -142,11 +142,11 @@ il collegamento a Strava: dopo un ripristino su un altro telefono, ricollegalo.
 4. Sul telefono apri l'app, chiudila e riaprila: la nuova versione si vede
    dalla seconda apertura.
 
-Per passare alla versione 1.4 (sezione Dieta e nuovo avviso di fine recupero)
-vanno caricati: le cartelle `css`, `js` e `strava-worker` e i file
-`index.html`, `sw.js`, `README.md`, `FORMATO-DIETA.md`, `GUIDA-STRAVA.md`.
-Trascinando una cartella nella pagina di GitHub, i file finiscono nella
-cartella giusta.
+Il modo più semplice: carica di nuovo **tutto tranne la cartella `.claude`**,
+come la prima volta. I file uguali non cambiano nulla, quelli nuovi
+sostituiscono i vecchi. Trascinando le cartelle nella pagina di GitHub, i file
+finiscono nella cartella giusta. Scegli sempre **Commit directly to the main
+branch**.
 
 Per provarla sul PC prima di pubblicarla:
 
