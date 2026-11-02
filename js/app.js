@@ -1,9 +1,10 @@
 'use strict';
 
-const VERSIONE_APP = '1.2';
+const VERSIONE_APP = '1.4';
+const GIRI_BIP = 4;
 const CHIAVE = 'scheda-palestra-dati';
 const GIORNI_SETTIMANA = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
-const TITOLI = { allena: 'Allena', scheda: 'Scheda', storico: 'Storico', dati: 'Dati' };
+const TITOLI = { allena: 'Allena', scheda: 'Scheda', storico: 'Storico', dieta: 'Dieta', dati: 'Dati' };
 const METRICHE = {
   carico: { nome: 'Carico', unita: 'kg' },
   e1rm: { nome: '1RM stim.', unita: 'kg' },
@@ -17,6 +18,7 @@ const contenuto = $('#contenuto');
 let dati = carica();
 let vista = 'allena';
 let audioCtx = null;
+let suonoProgrammato = null;
 let wakeLock = null;
 let toastTimeout = null;
 let finitoTimeout = null;
@@ -32,7 +34,7 @@ function datiVuoti() {
     schedePrecedenti: [],
     sedute: [],
     sedutaInCorso: null,
-    impostazioni: { suono: true, vibrazione: true, ultimoBackup: null }
+    impostazioni: { suono: true, vibrazione: true, notifica: false, ultimoBackup: null }
   };
 }
 
@@ -484,11 +486,13 @@ function avviaTimer(sec, nome) {
   if (!sd) return;
   clearTimeout(finitoTimeout);
   sd.timer = { fine: Date.now() + sec * 1000, durata: sec, nome };
+  programmaSuono(sec);
   aggiornaTimer();
 }
 
 function fermaTimer() {
   if (dati.sedutaInCorso) dati.sedutaInCorso.timer = null;
+  annullaSuono();
   clearTimeout(finitoTimeout);
   const el = $('#timer');
   el.hidden = true;
@@ -515,10 +519,20 @@ function aggiornaTimer() {
 }
 
 function recuperoFinito(t) {
-  dati.sedutaInCorso.timer = null;
+  const sd = dati.sedutaInCorso;
+  sd.timer = null;
   salva();
   // Se l'app era chiusa da molto, niente avviso tardivo.
-  if (Date.now() - t.fine < 10000) { suona(); vibra(); }
+  if (Date.now() - t.fine < 10000) {
+    // Il suono programmato può essere già partito da solo (schermo spento): non si ripete.
+    const partito = suonoProgrammato && audioCtx && audioCtx.currentTime >= suonoProgrammato.inizio - 0.1;
+    if (!partito) suona();
+    vibra();
+    const nx = serieAttiva(sd);
+    avvisaNotifica(nx ? `Prossima serie: ${sd.esercizi[nx.i].nome}` : 'Prossima serie!');
+  } else {
+    annullaSuono();
+  }
   const el = $('#timer');
   el.hidden = false;
   el.classList.add('finito');
@@ -541,6 +555,7 @@ function azioneTimer(azione) {
   const delta = azione === '+15' ? 15 : -15;
   t.fine += delta * 1000;
   if (delta > 0) t.durata += delta;
+  programmaSuono((t.fine - Date.now()) / 1000);
   salva();
   aggiornaTimer();
 }
@@ -549,28 +564,96 @@ function sbloccaAudio() {
   try {
     audioCtx ??= new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume();
-  } catch (e) { /* audio non disponibile */ }
+  } catch (e) { return; /* audio non disponibile */ }
+  // Recupero partito prima che l'audio fosse pronto (app riaperta): si programma ora.
+  const t = dati.sedutaInCorso?.timer;
+  if (t && !suonoProgrammato && t.fine > Date.now()) programmaSuono((t.fine - Date.now()) / 1000);
+}
+
+// 4 giri di 3 bip, uno ogni 1,5 secondi: circa 6 secondi in tutto.
+function sequenzaBip(t0) {
+  const uscita = audioCtx.createGain();
+  uscita.connect(audioCtx.destination);
+  for (let giro = 0; giro < GIRI_BIP; giro++) {
+    [0, 0.25, 0.5].forEach((d, k) => {
+      const t = t0 + giro * 1.5 + d;
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = 'square';
+      o.frequency.value = k === 2 ? 1320 : 880;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.35, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+      o.connect(g).connect(uscita);
+      o.start(t);
+      o.stop(t + 0.22);
+    });
+  }
+  return uscita;
+}
+
+// Il suono di fine recupero si programma nel motore audio quando parte il recupero:
+// così suona all'ora giusta anche se il telefono rallenta la pagina (schermo spento).
+function programmaSuono(secondi) {
+  annullaSuono();
+  if (!dati.impostazioni.suono || !audioCtx || audioCtx.state === 'closed') return;
+  if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  const inizio = audioCtx.currentTime + Math.max(0.05, secondi);
+  suonoProgrammato = { uscita: sequenzaBip(inizio), inizio, fine: inizio + GIRI_BIP * 1.5 };
+}
+
+function annullaSuono() {
+  try { suonoProgrammato?.uscita.disconnect(); } catch (e) { /* già scollegato */ }
+  suonoProgrammato = null;
 }
 
 function suona() {
-  if (!dati.impostazioni.suono || !audioCtx) return;
-  const t0 = audioCtx.currentTime;
-  [0, 0.3, 0.6].forEach((d, k) => {
-    const o = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    o.type = 'sine';
-    o.frequency.value = k === 2 ? 1320 : 880;
-    g.gain.setValueAtTime(0.0001, t0 + d);
-    g.gain.exponentialRampToValueAtTime(0.6, t0 + d + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + d + 0.25);
-    o.connect(g).connect(audioCtx.destination);
-    o.start(t0 + d);
-    o.stop(t0 + d + 0.3);
-  });
+  programmaSuono(0);
 }
 
 function vibra() {
-  if (dati.impostazioni.vibrazione && navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 500]);
+  if (dati.impostazioni.vibrazione && navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500, 200, 900]);
+}
+
+// Un tocco sullo schermo mentre l'avviso suona lo ferma.
+function fermaAvviso() {
+  const s = suonoProgrammato;
+  if (!s || !audioCtx || audioCtx.currentTime < s.inizio || audioCtx.currentTime > s.fine) return;
+  annullaSuono();
+  navigator.vibrate?.(0);
+}
+
+// Con l'app in sottofondo o lo schermo spento la vibrazione della pagina non arriva:
+// la notifica di sistema sì, con il suono e la vibrazione delle notifiche del telefono.
+function avvisaNotifica(testo) {
+  if (!dati.impostazioni.notifica || document.visibilityState === 'visible') return;
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  navigator.serviceWorker?.ready.then(reg => reg.showNotification('Recupero finito', {
+    body: testo,
+    tag: 'recupero',
+    renotify: true,
+    icon: 'icons/icon-192.png',
+    badge: 'icons/icon-192.png',
+    vibrate: [500, 200, 500, 200, 900]
+  })).catch(() => {});
+}
+
+function chiudiNotifiche() {
+  navigator.serviceWorker?.getRegistration()
+    .then(reg => reg?.getNotifications({ tag: 'recupero' }))
+    .then(lista => lista?.forEach(n => n.close()))
+    .catch(() => {});
+}
+
+async function attivaNotifiche(el) {
+  let permesso = 'default';
+  if (el.checked && 'Notification' in window) {
+    permesso = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+  }
+  dati.impostazioni.notifica = el.checked && permesso === 'granted';
+  el.checked = dati.impostazioni.notifica;
+  salva();
+  if (permesso === 'denied') toast("Notifiche bloccate: abilitale nelle impostazioni di Android per l'app (o per Chrome), poi riprova.", true);
 }
 
 async function richiediWakeLock() {
@@ -604,7 +687,9 @@ function vai(v) {
 function render() {
   $('#titolo').textContent = vista === 'allena' && dati.sedutaInCorso ? 'Seduta in corso' : TITOLI[vista];
   document.querySelectorAll('.tab button').forEach(b => b.classList.toggle('attiva', b.dataset.vista === vista));
-  if (!dati.scheda && vista !== 'dati') {
+  if (vista === 'dieta') {
+    renderDieta();
+  } else if (!dati.scheda && vista !== 'dati') {
     contenuto.innerHTML = '<p class="vuoto">Nessuna scheda caricata. Importane una dalla sezione Dati.</p>';
   } else if (vista === 'allena') {
     dati.sedutaInCorso ? renderSeduta() : renderGiorni();
@@ -1179,7 +1264,7 @@ function renderDati() {
 
     <section class="card">
       <h3>Backup completo</h3>
-      <p class="muto piccolo">Salva in un file tutto: scheda, schede precedenti e storico. Conservalo su Google Drive: i dati dell'app vivono solo su questo telefono.
+      <p class="muto piccolo">Salva in un file tutto: scheda, schede precedenti, storico e dieta (sgarri, attività, impostazioni). Conservalo su Google Drive: i dati dell'app vivono solo su questo telefono.
       ${imp.ultimoBackup ? `<br>Ultimo backup: ${esc(fmtData(imp.ultimoBackup))}.` : '<br>Nessun backup ancora.'}</p>
       <div class="riga-bottoni">
         <button class="btn primario" data-azione="scarica-backup">Salva backup</button>
@@ -1191,8 +1276,13 @@ function renderDati() {
       <h3>Avviso di fine recupero</h3>
       <label class="spunta-campo"><input type="checkbox" data-campo="suono"${imp.suono ? ' checked' : ''}> Suono</label>
       <label class="spunta-campo"><input type="checkbox" data-campo="vibrazione"${imp.vibrazione ? ' checked' : ''}> Vibrazione</label>
-      <div class="riga-bottoni"><button class="btn" data-azione="prova-avviso">Prova l'avviso</button></div>
-      <p class="muto piccolo">Durante la seduta lo schermo resta acceso, così il timer suona anche se appoggi il telefono.</p>
+      ${'Notification' in window ? `<label class="spunta-campo"><input type="checkbox" data-campo="notifica"${imp.notifica && Notification.permission === 'granted' ? ' checked' : ''}> Notifica anche con un'altra app aperta o a schermo spento</label>` : ''}
+      <div class="riga-bottoni">
+        <button class="btn" data-azione="prova-avviso">Prova l'avviso</button>
+        <button class="btn" data-azione="prova-spento">Prova a schermo spento</button>
+      </div>
+      <p class="muto piccolo">L'avviso suona per circa 6 secondi: tocca lo schermo per fermarlo. Durante la seduta lo schermo resta acceso.
+      Con lo schermo spento dipende dal telefono: tocca «Prova a schermo spento» e spegni lo schermo entro 10 secondi; se senti l'avviso, funziona anche durante i recuperi.</p>
     </section>
 
     <p class="muto piccolo">Scheda Palestra ${VERSIONE_APP} · ${dati.sedute.length} sedute salvate · ${dati.schedePrecedenti.length} schede archiviate.</p>`;
@@ -1243,7 +1333,7 @@ function scaricaBackup() {
     formato: 'backup-palestra',
     versione: 1,
     esportatoIl: new Date().toISOString(),
-    dati: { ...dati, sedutaInCorso: null }
+    dati: { ...dati, sedutaInCorso: null, dieta: dietaPerBackup() }
   }, null, 1);
   const nome = `backup-palestra-${dataISO(new Date())}.json`;
   const file = new File([contenutoFile], nome, { type: 'application/json' });
@@ -1288,8 +1378,12 @@ async function ripristinaBackup(testo) {
   if (!await chiedi(`Ripristinare il backup del ${fmtData(o.esportatoIl)} (${n} sedute)? I dati attuali saranno sostituiti.`, 'Ripristina', true)) return;
   fermaTimer();
   rilasciaWakeLock();
+  // Il collegamento a Strava non è nel backup: resta quello di questo telefono.
+  const stravaPrima = dati.dieta?.strava?.token;
   dati = Object.assign(datiVuoti(), d, { sedutaInCorso: null });
   dati.impostazioni = Object.assign(datiVuoti().impostazioni, d.impostazioni);
+  preparaDieta();
+  if (stravaPrima && !dati.dieta.strava.token) dati.dieta.strava.token = stravaPrima;
   salva();
   toast('Backup ripristinato.');
   vai('allena');
@@ -1315,6 +1409,17 @@ const azioni = {
   'conferma-import': () => confermaImport(),
   'scarica-backup': () => scaricaBackup(),
   'prova-avviso': () => { suona(); vibra(); },
+  'prova-spento': () => {
+    sbloccaAudio();
+    programmaSuono(10);
+    const fine = Date.now() + 10000;
+    setTimeout(() => {
+      if (Date.now() - fine > 10000) return;
+      vibra();
+      avvisaNotifica('Prova riuscita: così ti avviserà a fine recupero.');
+    }, 10000);
+    toast('Spegni lo schermo adesso: tra 10 secondi deve suonare e vibrare.');
+  },
   'modifica-scheda': () => { bozza = bozzaDa(dati.scheda); render(); window.scrollTo(0, 0); },
   'ed-apri': b => {
     const e = bozza.giorni[b.dataset.g].esercizi[b.dataset.e];
@@ -1360,8 +1465,9 @@ const azioni = {
   },
   'ed-salva': () => salvaBozza()
 };
+Object.assign(azioni, azioniDieta);
 
-document.addEventListener('pointerdown', sbloccaAudio, { passive: true });
+document.addEventListener('pointerdown', () => { fermaAvviso(); sbloccaAudio(); }, { passive: true });
 
 document.addEventListener('click', e => {
   const d = e.target.closest('[data-dialogo]');
@@ -1378,7 +1484,9 @@ document.addEventListener('click', e => {
 document.addEventListener('input', e => {
   const el = e.target;
   const sd = dati.sedutaInCorso;
-  if (el.dataset.ed && bozza) {
+  if (el.dataset.dt) {
+    if (el.type !== 'file') campoDieta(el);
+  } else if (el.dataset.ed && bozza) {
     impostaBozza(el.dataset.ed, el.type === 'checkbox' ? el.checked : el.value);
     if (el.type === 'checkbox') render();
   } else if (el.dataset.k && sd) {
@@ -1393,9 +1501,11 @@ document.addEventListener('input', e => {
 document.addEventListener('change', e => {
   const el = e.target;
   const campo = el.dataset.campo;
-  if (campo === 'grafico-esercizio') { statoGrafico.esercizio = el.value; render(); }
+  if (el.dataset.dt && el.type === 'file' && el.files[0]) fileDieta(el);
+  else if (campo === 'grafico-esercizio') { statoGrafico.esercizio = el.value; render(); }
   else if (campo === 'export-settimane') { settimaneExport = Number(el.value); $('#testo-export').value = testoPerClaude(settimaneExport); }
   else if (campo === 'suono' || campo === 'vibrazione') { dati.impostazioni[campo] = el.checked; salva(); }
+  else if (campo === 'notifica') attivaNotifiche(el);
   else if ((campo === 'file-import' || campo === 'file-backup') && el.files[0]) {
     el.files[0].text().then(testo => {
       if (campo === 'file-import') { $('#testo-import').value = testo; controllaImport(testo); }
@@ -1407,6 +1517,7 @@ document.addEventListener('change', e => {
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
+  chiudiNotifiche();
   if (dati.sedutaInCorso) richiediWakeLock();
   tick();
 });
@@ -1425,10 +1536,15 @@ async function avvia() {
       toast('Impossibile caricare la scheda iniziale: ' + e.message, true);
     }
   }
+  if (!dati.dieta) {
+    preparaDieta();
+    salva();
+  }
   // Un recupero scaduto mentre l'app era chiusa non va riproposto.
   const t = dati.sedutaInCorso?.timer;
   if (t && t.fine < Date.now()) dati.sedutaInCorso.timer = null;
   if (dati.sedutaInCorso) richiediWakeLock();
+  ritornoStrava();
   render();
 
   navigator.storage?.persist?.().catch(() => {});

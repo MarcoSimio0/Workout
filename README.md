@@ -1,8 +1,9 @@
 # Scheda Palestra
 
-Web app (PWA) per seguire la scheda di palestra dal telefono Android: funziona
-offline, salva i dati sul telefono e scambia la scheda con Claude tramite testo
-e file JSON. Gratis, senza account e senza server.
+Web app (PWA) per seguire la scheda di palestra e il bilancio calorico della
+dieta dal telefono Android: funziona offline, salva i dati sul telefono e
+scambia scheda, dieta e sgarri con Claude tramite testo e file JSON. Gratis,
+senza account e senza server (tranne il collegamento facoltativo a Strava).
 
 ## Cosa contiene la cartella
 
@@ -13,6 +14,9 @@ e file JSON. Gratis, senza account e senza server.
 | `sw.js` | Fa funzionare l'app senza connessione |
 | `scheda-iniziale.json` | La scheda caricata al primo avvio |
 | `FORMATO-SCHEDA.md` | Descrizione del formato JSON delle schede |
+| `FORMATO-DIETA.md` | Formato JSON della dieta e degli sgarri, e calcolo del saldo |
+| `GUIDA-STRAVA.md` | Come collegare Garmin → Strava → app |
+| `strava-worker/worker.js` | Il codice da incollare su Cloudflare per Strava |
 
 ---
 
@@ -61,8 +65,10 @@ del PC, senza installare niente.
   I kg della volta precedente sono già precompilati; se l'ultima volta hai
   avuto più margine del buffer su tutte le serie, l'app propone +2,5 kg.
   Alla fine tocca **Termina e salva**.
-  Durante la seduta lo schermo resta acceso; se passi a un'altra app, il
-  timer non suona finché non torni.
+  A fine recupero suona per circa 6 secondi e vibra: tocca lo schermo per
+  fermarlo. Durante la seduta lo schermo resta acceso. Per l'avviso anche con
+  un'altra app aperta o a schermo spento, attiva in **Dati** la notifica e usa
+  **Prova a schermo spento** per vedere se il tuo telefono lo permette.
 - **Scheda**: la scheda attuale e le regole di progressione. Con
   **Modifica scheda** cambi nomi, peso di lavoro, serie, ripetizioni,
   buffer, recupero e note; aggiungi, elimini e sposti esercizi e giorni;
@@ -70,6 +76,39 @@ del PC, senza installare niente.
   aggiorna anche da solo quando salvi una seduta.
 - **Storico**: grafico dell'andamento per esercizio (carico massimo, 1RM
   stimato, volume, ripetizioni) ed elenco delle sedute.
+- **Dieta**: bilancio calorico rispetto alla dieta (vedi sotto).
+
+## 3bis. Dieta e bilancio calorico
+
+L'idea: la dieta si dà per seguita, segni solo le differenze. In alto scegli
+la parte della sezione:
+
+- **Giorno**: i pasti del giorno. Tocca una voce che non hai mangiato per
+  toglierla, oppure **Salta** per un pasto intero. In cima c'è il saldo del giorno.
+  Con ‹ › cambi giorno.
+- **Sgarri**: descrivi lo sgarro a Claude, che risponde con un breve blocco di
+  testo; incollalo in **Incolla sgarro** → **Controlla** → **Aggiungi**.
+  Puoi anche inserirlo a mano, modificarlo o eliminarlo.
+- **Attività**: attività da Strava, dal CSV di Garmin Connect o inserite a mano
+  (con la stima delle calorie tramite MET, formula mostrata).
+- **Bilancio**: grafico per giorno, settimana, mese, trimestre o anno (barre
+  rosse sopra la dieta, blu sotto, linea del saldo cumulato), riepilogo del
+  periodo ed **Esporta per Claude**.
+- **⚙**: carica la dieta (JSON preparato da Claude), imposta metabolismo basale
+  BIA, peso, attività già prevista dalla dieta, e collega Strava.
+
+Saldo del giorno = (dieta − voci tolte + sgarri) − (obiettivo + attività extra).
+I dettagli e il formato JSON sono in [FORMATO-DIETA.md](FORMATO-DIETA.md);
+il collegamento a Strava in [GUIDA-STRAVA.md](GUIDA-STRAVA.md).
+
+Primi passi:
+
+1. Chiedi a Claude la dieta nel formato di FORMATO-DIETA.md (puoi incollargli
+   il file) e caricala da **Dieta → ⚙**.
+2. Sempre in ⚙ scrivi basale e peso.
+3. Facoltativo: collega Strava seguendo GUIDA-STRAVA.md, oppure importa il CSV.
+4. Ogni tanto **Bilancio → Esporta per Claude** e chiedigli come bilanciare la
+   settimana.
 
 ## 4. Aggiornare la scheda con Claude
 
@@ -91,6 +130,8 @@ I dati stanno solo nel telefono, dentro Chrome. Disinstallando l'app o
 cancellando i dati di Chrome si perdono. Ogni tanto fai
 **Dati → Salva backup** e salva il file su Google Drive. Per recuperarli,
 su un telefono nuovo, usa **Dati → Ripristina…**.
+Il backup contiene anche la dieta (sgarri, attività, impostazioni), ma non
+il collegamento a Strava: dopo un ripristino su un altro telefono, ricollegalo.
 
 ## 6. Modificare l'app in futuro
 
@@ -100,6 +141,12 @@ su un telefono nuovo, usa **Dati → Ripristina…**.
    i file modificati (sovrascrivono quelli vecchi) → **Commit changes**.
 4. Sul telefono apri l'app, chiudila e riaprila: la nuova versione si vede
    dalla seconda apertura.
+
+Per passare alla versione 1.4 (sezione Dieta e nuovo avviso di fine recupero)
+vanno caricati: le cartelle `css`, `js` e `strava-worker` e i file
+`index.html`, `sw.js`, `README.md`, `FORMATO-DIETA.md`, `GUIDA-STRAVA.md`.
+Trascinando una cartella nella pagina di GitHub, i file finiscono nella
+cartella giusta.
 
 Per provarla sul PC prima di pubblicarla:
 

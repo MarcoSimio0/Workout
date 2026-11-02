@@ -1,11 +1,12 @@
 // Service worker: rende l'app disponibile offline.
 // Quando modifichi i file dell'app, aumenta il numero di versione qui sotto.
-const CACHE = 'scheda-palestra-v3';
+const CACHE = 'scheda-palestra-v5';
 
 const FILE = [
   './',
   './index.html',
   './css/style.css',
+  './js/dieta.js',
   './js/app.js',
   './manifest.webmanifest',
   './scheda-iniziale.json',
@@ -24,6 +25,15 @@ self.addEventListener('activate', e => {
       .then(chiavi => Promise.all(chiavi.filter(k => k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+// Tocco sulla notifica di fine recupero: si torna all'app.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(finestre => {
+    const app = finestre.find(c => c.url.startsWith(self.registration.scope));
+    return app ? app.focus() : self.clients.openWindow('./');
+  }));
 });
 
 // Risponde subito dalla cache e intanto aggiorna la copia dalla rete:

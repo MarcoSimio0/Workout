@@ -209,6 +209,59 @@ details.seduta[open] summary { margin-bottom: 8px; }
 .seduta-dettaglio div { padding: 5px 0; border-top: 1px solid var(--bordo); }
 .seduta-dettaglio .muto { display: block; }
 
+/* ---------- Dieta ---------- */
+.segmenti.cinque { grid-template-columns: repeat(5, 1fr); }
+.dt-sezioni { margin-bottom: 14px; }
+.dt-naviga { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 8px; margin: 12px 0; text-align: center; }
+.dt-naviga .btn { padding: 0; font-size: 24px; font-weight: 400; }
+.dt-naviga b { display: block; font-size: 17px; }
+.dt-naviga .btn.testo { min-height: 28px; font-size: 13px; font-weight: 600; color: var(--accento); }
+.dt-numero { font-size: 34px; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.dt-stato { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muto); }
+.dt-stato i, .legenda i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+.dt-conto { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; font-size: 14px; margin-top: 10px; font-variant-numeric: tabular-nums; }
+.dt-conto span:nth-child(even) { text-align: right; }
+.dt-conto .totale { border-top: 1px solid var(--bordo); padding-top: 3px; margin-bottom: 4px; font-weight: 600; }
+.dt-pasto-testa { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dt-pasto-testa .btn { min-height: 38px; padding: 0 14px; font-size: 14px; }
+.dt-pasto.saltato h3 { color: var(--muto); text-decoration: line-through; }
+.dt-voci { list-style: none; margin: 6px 0 0; padding: 0; }
+.dt-voce {
+  width: 100%; min-height: 44px; padding: 6px 0;
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  background: none; border: 0; border-top: 1px solid var(--bordo);
+  color: inherit; font: inherit; font-size: 15px; text-align: left; cursor: pointer;
+}
+.dt-voci li:first-child .dt-voce { border-top: 0; }
+.dt-voce.tolta { color: var(--muto); text-decoration: line-through; }
+.dt-voce:disabled { cursor: default; }
+.dt-voce .kcal { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.dt-riga { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 10px 0; border-top: 1px solid var(--bordo); }
+.card > h3 + .dt-riga, .card > .dt-riga:first-child, .nota + .dt-riga { border-top: 0; }
+.dt-riga-azioni { display: flex; flex-direction: column; align-items: flex-end; flex-shrink: 0; }
+.dt-riga-azioni .btn { min-height: 34px; padding: 0 6px; font-size: 14px; }
+.dt-form { border-top: 1px solid var(--bordo); margin-top: 8px; padding-top: 10px; }
+.card > .dt-form:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
+.dt-tipi { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; font-size: 14px; }
+.dt-piano { margin: 6px 0; padding-left: 18px; }
+.legenda { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muto); margin-top: 6px; }
+.legenda span { display: inline-flex; align-items: center; gap: 5px; }
+.legenda i.linea { width: 14px; height: 2px; border-radius: 1px; background: var(--testo); }
+.grafico svg [data-azione] { cursor: pointer; }
+.dt-selezione { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 14px; margin-top: 8px; }
+.dt-selezione .btn { min-height: 34px; padding: 0 8px; color: var(--accento); }
+.dt-elenco { padding-top: 4px; padding-bottom: 4px; }
+.dt-giorno-riga {
+  width: 100%; min-height: 48px; padding: 8px 0;
+  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px;
+  background: none; border: 0; border-top: 1px solid var(--bordo);
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.dt-giorno-riga:first-child { border-top: 0; }
+.dt-giorno-riga .muto { display: block; }
+.dt-giorno-riga b { font-variant-numeric: tabular-nums; }
+.errore-testo { color: var(--pericolo); white-space: pre-line; }
+
 /* ---------- Toast ---------- */
 .toast {
   position: fixed; left: 16px; right: 16px; top: calc(64px + env(safe-area-inset-top));
@@ -236,7 +289,7 @@ details.seduta[open] summary { margin-bottom: 8px; }
 /* ---------- Barra delle schede in basso ---------- */
 .tab {
   position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: var(--superficie); border-top: 1px solid var(--bordo);
   padding-bottom: env(safe-area-inset-bottom);
 }
