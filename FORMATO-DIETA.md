@@ -157,6 +157,7 @@ saldo = (kcal della dieta − voci e pasti tolti + sgarri) − (obiettivo + atti
 - la dieta del giorno conta come seguita al 100%, salvo le voci e i pasti tolti;
 - **attività extra** = calorie attive delle attività non già previste dalla
   dieta, meno le eventuali «altre kcal al giorno già previste» delle impostazioni;
-- calorie **attive**: da Garmin e Strava si toglie la quota del metabolismo basale
-  durante l'attività (`basale × ore / 24`); per le attività senza calorie si usa
+- calorie **attive**: alle calorie delle attività importate da Garmin si toglie
+  la quota del metabolismo basale, `Calorie − basale × (durata in ore / 24)`
+  (correzione disattivabile in Dieta → ⚙); per le attività senza calorie si usa
   `(MET − 1) × peso × ore`, dove il −1 toglie il consumo a riposo.

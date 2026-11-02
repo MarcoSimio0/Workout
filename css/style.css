@@ -264,6 +264,10 @@ details.seduta[open] summary { margin-bottom: 8px; }
 .dt-giorno-riga .muto { display: block; }
 .dt-giorno-riga b { font-variant-numeric: tabular-nums; }
 .errore-testo { color: var(--pericolo); white-space: pre-line; }
+.dt-verifica { border-color: var(--attivo); }
+.dt-confronto { display: grid; gap: 8px; padding: 10px 0; border-top: 1px solid var(--bordo); }
+.dt-confronto .etichetta { display: inline; }
+.dt-confronto .riga-bottoni { margin-top: 0; }
 
 /* ---------- Toast ---------- */
 .toast {

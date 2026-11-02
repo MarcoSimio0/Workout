@@ -1,6 +1,6 @@
 // Service worker: rende l'app disponibile offline.
 // Quando modifichi i file dell'app, aumenta il numero di versione qui sotto.
-const CACHE = 'scheda-palestra-v6';
+const CACHE = 'scheda-palestra-v7';
 
 const FILE = [
   './',

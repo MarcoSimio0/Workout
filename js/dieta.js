@@ -24,7 +24,7 @@ const TIPI_ATTIVITA = {
   altro: { nome: 'Altro', met: 4 }
 };
 
-// Tipi di Strava e di Garmin Connect (in italiano o in inglese) → tipo dell'app.
+// Tipi di Garmin Connect (in italiano o in inglese) → tipo dell'app.
 const RICONOSCI_TIPO = [
   ['corsa', /run|cors|tapis|jog/],
   ['camminata', /walk|cammin/],
@@ -78,14 +78,11 @@ const statoDieta = {
   sgarriInAttesa: null,
   testoDieta: '',
   dietaInAttesa: null,
-  csvInAttesa: null,
+  ultimoImport: null,
   formSgarro: null,
   formAttivita: null,
   tutteAttivita: false
 };
-
-let syncStravaInCorso = false;
-let ultimoTentativoStrava = 0;
 
 // ===================== Dati =====================
 
@@ -95,8 +92,9 @@ function dietaVuota() {
     giorni: {},
     sgarri: [],
     attivita: [],
-    impostazioni: { basale: null, peso: null, attivitaPrevistaKcal: 0, tipiPrevisti: ['palestra'], inizio: null },
-    strava: { worker: '', token: null, stato: null, ultimaSync: null, ignorate: [] }
+    garminScartate: [],   // chiavi delle attività di Garmin eliminate o scartate: non si reimportano
+    daVerificare: [],     // attività di Garmin sovrapposte a una inserita a mano
+    impostazioni: { basale: null, peso: null, attivitaPrevistaKcal: 0, tipiPrevisti: ['palestra'], inizio: null, correzioneBasale: true }
   };
 }
 
@@ -118,17 +116,13 @@ function preparaDieta() {
   const d = dati.dieta, v = dietaVuota();
   for (const k of Object.keys(v)) if (d[k] == null) d[k] = v[k];
   d.impostazioni = Object.assign(v.impostazioni, d.impostazioni);
-  d.strava = Object.assign(v.strava, d.strava);
+  // Versioni precedenti: collegamento a Strava (tolto) e attività da CSV senza chiave.
+  delete d.strava;
+  d.attivita.forEach(a => { if (a.fonte === 'csv') a.fonte = 'garmin'; });
   return d;
 }
 
 const D = () => dati.dieta || preparaDieta();
-
-// Copia per il backup: senza le chiavi di accesso a Strava.
-function dietaPerBackup() {
-  const d = D();
-  return { ...d, strava: { ...d.strava, token: null, stato: null } };
-}
 
 const nuovoId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -151,10 +145,6 @@ function fmtGiorno(iso, lungo = false) {
   return dataLocale(iso).toLocaleDateString('it-IT', lungo
     ? { weekday: 'long', day: 'numeric', month: 'long' }
     : { weekday: 'short', day: 'numeric', month: 'numeric' });
-}
-
-function fmtQuando(iso) {
-  return new Date(iso).toLocaleString('it-IT', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtMinuti(m) {
@@ -709,22 +699,27 @@ function stimaMET(a) {
   return { met, peso, ore, kcal: peso ? Math.max(0, Math.round((met - 1) * peso * ore)) : 0 };
 }
 
-// Garmin e Strava danno le calorie totali dell'attività: si toglie la quota del basale.
+// Garmin dà le calorie totali dell'attività, compresa la quota del metabolismo basale:
+// kcal attive = Calorie − basale × (durata in ore / 24). La correzione si può disattivare.
+function quotaRiposo(a) {
+  const imp = D().impostazioni;
+  return imp.correzioneBasale && imp.basale ? imp.basale * (a.durataMin || 0) / 60 / 24 : 0;
+}
+
 function kcalAttive(a) {
   if (a.kcalAttive != null) return a.kcalAttive;
-  if (a.kcalTotali != null) {
-    const basale = D().impostazioni.basale || 0;
-    return Math.max(0, Math.round(a.kcalTotali - basale * (a.durataMin || 0) / 1440));
-  }
+  if (a.kcalTotali != null) return Math.max(0, Math.round(a.kcalTotali - quotaRiposo(a)));
   return stimaMET(a).kcal;
 }
 
 function origineKcal(a) {
-  const basale = D().impostazioni.basale;
-  if (a.kcalAttive != null) return a.fonte === 'manuale' ? 'scritte a mano' : 'calorie attive da Garmin';
+  const imp = D().impostazioni;
+  if (a.kcalAttive != null) return 'scritte a mano';
   if (a.kcalTotali != null) {
-    if (!basale) return `${fmtKcal(a.kcalTotali)} totali: imposta il basale per togliere la quota a riposo`;
-    return `${fmtKcal(a.kcalTotali)} totali − ${fmtKcal(basale * (a.durataMin || 0) / 1440)} a riposo`;
+    if (!imp.correzioneBasale) return `${fmtKcal(a.kcalTotali)} di Garmin, senza togliere il basale`;
+    if (!imp.basale) return `${fmtKcal(a.kcalTotali)} di Garmin: imposta il basale in ⚙ per togliere la quota a riposo`;
+    const ore = Math.round((a.durataMin || 0) / 60 * 100) / 100;
+    return `${fmtKcal(a.kcalTotali)} − ${fmtKcal(imp.basale)} × ${fmtNum(ore)} h / 24`;
   }
   const st = stimaMET(a);
   if (!st.peso) return 'stima impossibile: imposta il peso';
@@ -735,24 +730,26 @@ function descrAttivita(a) {
   const parti = [];
   if (a.ora) parti.push(a.ora);
   if (a.durataMin) parti.push(fmtMinuti(a.durataMin));
-  if (a.distanzaKm) parti.push(fmtNum(Math.round(a.distanzaKm * 10) / 10) + ' km');
+  if (a.distanzaKm) parti.push(fmtNum(Math.round(a.distanzaKm * 100) / 100) + ' km');
   if (a.velocita && TIPI_ATTIVITA[a.categoria]?.velocita) parti.push(fmtNum(a.velocita) + ' km/h');
-  parti.push({ strava: 'Strava', csv: 'Garmin CSV', manuale: 'a mano' }[a.fonte] || '');
-  return parti.filter(Boolean).join(' · ');
+  if (a.fcMedia) parti.push('FC ' + a.fcMedia);
+  parti.push(a.fonte === 'manuale' ? 'a mano' : 'Garmin');
+  return parti.join(' · ');
 }
 
 const minutiDa = ora => Number(ora.slice(0, 2)) * 60 + Number(ora.slice(3, 5));
 
-// La stessa attività arrivata da due fonti (Strava e CSV, o inserita anche a mano).
-function stessaAttivita(a, b) {
+// Due attività dello stesso giorno che si sovrappongono nel tempo. Se una non ha l'ora
+// di inizio non si può sapere: si considerano sovrapposte se sono dello stesso tipo.
+function sovrapposte(a, b) {
   if (a.data !== b.data) return false;
-  if (a.ora && b.ora) return Math.abs(minutiDa(a.ora) - minutiDa(b.ora)) <= 15;
-  const da = a.durataMin || 0, db = b.durataMin || 0;
-  return a.categoria === b.categoria && Math.abs(da - db) <= Math.max(5, 0.15 * Math.max(da, db));
+  if (!a.ora || !b.ora) return a.categoria === b.categoria;
+  const ia = minutiDa(a.ora), ib = minutiDa(b.ora);
+  return ia < ib + Math.max(b.durataMin || 0, 1) && ib < ia + Math.max(a.durataMin || 0, 1);
 }
 
 function nuovaAttivitaForm(data) {
-  statoDieta.formAttivita = { data: data || oggiISO(), categoria: 'camminata', durata: '', velocita: '', kcal: '', met: '' };
+  statoDieta.formAttivita = { data: data || oggiISO(), ora: '', categoria: 'camminata', durata: '', velocita: '', kcal: '', met: '' };
 }
 
 function testoStima(f) {
@@ -766,7 +763,7 @@ function testoStima(f) {
   return `Stima: (MET ${fmtNum(met)} − 1) × ${fmtNum(peso)} kg × ${fmtNum(Math.round(durata / 60 * 100) / 100)} h = <b>${fmtKcal(stima)} kcal attive</b>`;
 }
 
-function salvaFormAttivita() {
+async function salvaFormAttivita() {
   const f = statoDieta.formAttivita;
   const data = leggiData(f.data);
   const durata = numero(f.durata), vel = numero(f.velocita), kcal = numero(f.kcal), met = numero(f.met);
@@ -779,9 +776,16 @@ function salvaFormAttivita() {
   if (err.length) { toast(err.join('\n'), true); return; }
 
   const a = { id: nuovoId(), fonte: 'manuale', data, categoria: f.categoria, nome: TIPI_ATTIVITA[f.categoria].nome, durataMin: durata };
+  if (/^\d{2}:\d{2}$/.test(f.ora || '')) a.ora = f.ora;
   if (vel) a.velocita = vel;
   if (kcal != null) a.kcalAttive = Math.round(kcal);
   else a.met = met ?? metPer(f.categoria, vel);
+
+  const garmin = D().attivita.find(x => x.fonte !== 'manuale' && sovrapposte(a, x));
+  if (garmin && !await chiedi(
+    `Si sovrappone a «${garmin.nome}»${garmin.ora ? ' delle ' + garmin.ora : ''} importata da Garmin: aggiungendola, le calorie si sommano.\nAggiungerla comunque?`,
+    'Aggiungi')) return;
+
   D().attivita.push(a);
   statoDieta.formAttivita = null;
   salva();
@@ -798,13 +802,12 @@ function aggiornaStimaAttivita() {
   if (met) met.placeholder = fmtNum(metPer(f.categoria, numero(f.velocita)));
 }
 
-// ---------- CSV di Garmin Connect ----------
+// ---------- Importa Garmin (Activities.csv di Garmin Connect) ----------
+// Il file si legge sul telefono e non si salva: restano solo i dati delle attività.
 
+// CSV con le virgolette: le virgole dentro "…" non separano i campi.
 function righeCSV(testo) {
   testo = testo.replace(/^﻿/, '');
-  const fineIntestazione = testo.indexOf('\n');
-  const intestazione = fineIntestazione < 0 ? testo : testo.slice(0, fineIntestazione);
-  const sep = (intestazione.match(/;/g) || []).length > (intestazione.match(/,/g) || []).length ? ';' : ',';
   const righe = [];
   let riga = [], campo = '', traVirgolette = false;
   for (let i = 0; i < testo.length; i++) {
@@ -814,7 +817,7 @@ function righeCSV(testo) {
       else if (testo[i + 1] === '"') { campo += '"'; i++; }
       else traVirgolette = false;
     } else if (c === '"') traVirgolette = true;
-    else if (c === sep) { riga.push(campo); campo = ''; }
+    else if (c === ',') { riga.push(campo); campo = ''; }
     else if (c === '\n' || c === '\r') {
       if (c === '\r' && testo[i + 1] === '\n') i++;
       riga.push(campo);
@@ -827,259 +830,134 @@ function righeCSV(testo) {
   return righe.filter(r => r.some(x => x.trim()));
 }
 
+// Le colonne si cercano per nome: Garmin può cambiarne l'ordine.
 function colonneGarmin(intestazione) {
   const h = intestazione.map(chiave);
-  const trova = (...regole) => {
-    for (const re of regole) {
-      const i = h.findIndex(x => re.test(x));
-      if (i >= 0) return i;
-    }
-    return -1;
-  };
+  const trova = (...nomi) => h.findIndex(x => nomi.includes(x));
   return {
-    data: trova(/^data$/, /^date$/, /^(data|date|start)/, /inizio/),
-    tipo: trova(/tipo di attivita/, /activity type/, /^tipo$/, /^type$/, /sport/),
-    titolo: trova(/^titolo$/, /^title$/, /^nome$/, /^name$/),
-    durata: trova(/^tempo$/, /^time$/, /^durata$/, /^duration$/, /tempo trascorso/, /elapsed time/, /tempo in movimento/, /moving time/),
-    calorie: trova(/^calorie$/, /^calories$/, /^kcal$/, /calorie totali/, /total calories/),
-    attive: trova(/calorie attive/, /active calories/),
-    distanza: trova(/^distanza$/, /^distance$/, /distanza/, /distance/)
+    tipo: trova('tipo di attivita', 'activity type'),
+    data: trova('data', 'date'),
+    calorie: trova('calorie', 'calories'),
+    durata: trova('tempo', 'time'),
+    distanza: trova('distanza', 'distance'),
+    fcMedia: trova('fc media', 'avg hr')
   };
 }
 
-// "01:02:33", "45:10" (min:sec) oppure minuti
+// Numeri di Garmin: la virgola separa le migliaia ("1,042"), il punto i decimali ("0.86").
+function numeroGarmin(s) {
+  if (!s) return null;
+  const n = Number(String(s).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+// "hh:mm:ss" oppure "hh:mm:ss.d" → minuti
 function leggiDurata(t) {
   const s = String(t ?? '').trim();
   let m;
-  if ((m = s.match(/^(\d+):(\d{1,2}):(\d{1,2})(?:[.,]\d+)?$/))) return +m[1] * 60 + +m[2] + +m[3] / 60;
-  if ((m = s.match(/^(\d+):(\d{1,2})(?:[.,]\d+)?$/))) return +m[1] + +m[2] / 60;
-  return leggiDecimale(s);
+  if ((m = s.match(/^(\d+):(\d{1,2}):(\d{1,2}(?:\.\d+)?)$/))) return +m[1] * 60 + +m[2] + +m[3] / 60;
+  if ((m = s.match(/^(\d+):(\d{1,2}(?:\.\d+)?)$/))) return +m[1] + +m[2] / 60;
+  return null;
 }
 
-function attivitaDaCSV(testo) {
+const CAMPI_GARMIN = ['nome', 'categoria', 'durataMin', 'distanzaKm', 'velocita', 'fcMedia', 'kcalTotali'];
+
+function attivitaDaGarmin(riga, col) {
+  const val = i => {
+    const v = i >= 0 ? String(riga[i] ?? '').trim() : '';
+    return v === '--' ? '' : v;
+  };
+  const tipo = val(col.tipo);
+  const m = val(col.data).match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!tipo || !m || !dataValida(+m[1], +m[2], +m[3])) return null;
+  const data = `${m[1]}-${m[2]}-${m[3]}`;
+  const ora = m[4].padStart(2, '0') + ':' + m[5];
+  const dataOra = `${data} ${ora}:${m[6] || '00'}`;
+  // Chiave univoca: tipo di attività + data e ora al secondo.
+  const a = { id: nuovoId(), fonte: 'garmin', chiaveGarmin: chiave(tipo) + '|' + dataOra, data, ora, dataOra, categoria: categoriaDa(tipo), nome: tipo };
+  const durata = leggiDurata(val(col.durata));
+  if (durata) a.durataMin = Math.round(durata * 100) / 100;
+  const kcal = numeroGarmin(val(col.calorie));
+  if (kcal != null) a.kcalTotali = Math.round(kcal);
+  const km = numeroGarmin(val(col.distanza));
+  if (km) {
+    a.distanzaKm = km;
+    if (a.durataMin) a.velocita = Math.round(km / (a.durataMin / 60) * 10) / 10;
+  }
+  const fc = numeroGarmin(val(col.fcMedia));
+  if (fc) a.fcMedia = Math.round(fc);
+  return a;
+}
+
+function importaGarmin(testo) {
   const righe = righeCSV(testo);
   if (righe.length < 2) throw new Error('Il file è vuoto o non è un CSV.');
   const col = colonneGarmin(righe[0]);
-  if (col.data < 0) throw new Error('Non trovo la colonna con la data ("Data" o "Date").');
-  if (col.calorie < 0 && col.attive < 0 && col.durata < 0) throw new Error('Non trovo né le calorie né la durata delle attività.');
+  if (col.tipo < 0 || col.data < 0) throw new Error('Non trovo le colonne «Tipo di attività» e «Data»: è il file Activities.csv di Garmin Connect?');
 
-  const inizio = inizioMonitoraggio();
-  const esistenti = D().attivita;
-  const r = {
-    nuove: [], doppie: 0, vecchie: 0, scartate: 0,
-    colonne: Object.values(col).filter(i => i >= 0).map(i => righe[0][i].trim())
-  };
+  const d = D(), inizio = inizioMonitoraggio();
+  const r = { nuove: 0, presenti: 0, aggiornate: 0, verificare: 0, precedenti: 0, illeggibili: 0 };
   righe.slice(1).forEach(riga => {
-    const val = i => {
-      const v = i >= 0 ? String(riga[i] ?? '').trim() : '';
-      return v === '--' ? '' : v;
-    };
-    const data = leggiData(val(col.data));
-    if (!data) { r.scartate++; return; }
-    if (data < inizio) { r.vecchie++; return; }
-    const ora = val(col.data).match(/[ T](\d{1,2}):(\d{2})/);
-    const tipo = categoriaDa(val(col.tipo));
-    const a = {
-      id: nuovoId(),
-      fonte: 'csv',
-      data,
-      categoria: tipo !== 'altro' ? tipo : categoriaDa(val(col.titolo)),
-      nome: val(col.titolo) || val(col.tipo) || 'Attività'
-    };
-    if (ora) a.ora = ora[1].padStart(2, '0') + ':' + ora[2];
-    const durata = leggiDurata(val(col.durata));
-    if (durata) a.durataMin = Math.round(durata);
-    const attive = leggiKcal(val(col.attive)), totali = leggiKcal(val(col.calorie));
-    if (attive != null) a.kcalAttive = Math.round(attive);
-    else if (totali != null) a.kcalTotali = Math.round(totali);
-    const km = leggiDecimale(val(col.distanza));
-    if (km) {
-      a.distanzaKm = Math.round(km * 100) / 100;
-      if (a.durataMin) a.velocita = Math.round(km / (a.durataMin / 60) * 10) / 10;
+    const n = attivitaDaGarmin(riga, col);
+    if (!n) { r.illeggibili++; return; }
+    if (n.data < inizio) { r.precedenti++; return; }
+    if (d.garminScartate.includes(n.chiaveGarmin)) { r.presenti++; return; }
+
+    // Quelle importate con le versioni precedenti non hanno la chiave: si riconoscono da giorno, ora e tipo.
+    const esistente = d.attivita.find(a => a.chiaveGarmin === n.chiaveGarmin)
+      || d.attivita.find(a => a.fonte === 'garmin' && !a.chiaveGarmin && a.data === n.data && a.ora === n.ora && a.categoria === n.categoria);
+    if (esistente) {
+      if (esistente.chiaveGarmin && CAMPI_GARMIN.every(k => esistente[k] === n[k])) { r.presenti++; return; }
+      CAMPI_GARMIN.forEach(k => { if (n[k] === undefined) delete esistente[k]; else esistente[k] = n[k]; });
+      Object.assign(esistente, { chiaveGarmin: n.chiaveGarmin, dataOra: n.dataOra });
+      r.aggiornate++;
+      return;
     }
-    if ([...esistenti, ...r.nuove].some(b => stessaAttivita(a, b))) { r.doppie++; return; }
-    r.nuove.push(a);
+
+    const inAttesa = d.daVerificare.find(x => x.attivita.chiaveGarmin === n.chiaveGarmin);
+    if (inAttesa) {
+      inAttesa.attivita = { ...n, id: inAttesa.attivita.id };
+      r.verificare++;
+      return;
+    }
+    // Sovrapposta a una inserita a mano: non si sommano, decide l'utente.
+    const manuale = d.attivita.find(a => a.fonte === 'manuale' && sovrapposte(a, n));
+    if (manuale) {
+      d.daVerificare.push({ attivita: n, manualeId: manuale.id });
+      r.verificare++;
+      return;
+    }
+    d.attivita.push(n);
+    r.nuove++;
   });
   return r;
 }
 
-// ===================== Strava (tramite il worker di Cloudflare) =====================
-
-const urlRitornoStrava = () => location.origin + location.pathname;
-
-async function chiamaWorker(percorso, opzioni = {}) {
-  const r = await fetch(D().strava.worker + percorso, opzioni);
-  const corpo = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const e = new Error(corpo.message || corpo.errore || `errore ${r.status}`);
-    e.stato = r.status;
-    throw e;
-  }
-  return corpo;
+function testoRiepilogoGarmin(r) {
+  const p = (n, uno, tanti) => `${n} ${n === 1 ? uno : tanti}`;
+  return [
+    p(r.nuove, 'nuova', 'nuove'),
+    p(r.presenti, 'già presente', 'già presenti'),
+    p(r.aggiornate, 'aggiornata', 'aggiornate'),
+    `${r.verificare} da verificare`
+  ].join(', ');
 }
 
-async function collegaStrava() {
-  const s = D().strava;
-  if (!/^https:\/\/\S+$/.test(s.worker)) {
-    toast("Scrivi prima l'indirizzo del worker (https://…workers.dev).", true);
-    return;
+function risolviVerifica(i, tieniGarmin) {
+  const d = D();
+  const v = d.daVerificare[i];
+  if (!v) return;
+  if (tieniGarmin) {
+    d.attivita = d.attivita.filter(a => a.id !== v.manualeId);
+    d.attivita.push(v.attivita);
+  } else {
+    // Scartata: non torna con le prossime importazioni.
+    d.garminScartate.push(v.attivita.chiaveGarmin);
   }
-  let config;
-  try {
-    config = await chiamaWorker('/config');
-  } catch (e) {
-    toast('Il worker non risponde: ' + e.message, true);
-    return;
-  }
-  if (!config.client_id) { toast('Nel worker manca STRAVA_CLIENT_ID.', true); return; }
-  s.stato = Math.random().toString(36).slice(2);
+  d.daVerificare.splice(i, 1);
   salva();
-  const q = new URLSearchParams({
-    client_id: config.client_id,
-    redirect_uri: urlRitornoStrava(),
-    response_type: 'code',
-    approval_prompt: 'auto',
-    scope: 'activity:read_all',
-    state: 'strava-' + s.stato
-  });
-  location.href = 'https://www.strava.com/oauth/authorize?' + q;
-}
-
-// Al ritorno da Strava l'indirizzo contiene ?state=strava-…&code=…
-function ritornoStrava() {
-  const q = new URLSearchParams(location.search);
-  const stato = q.get('state');
-  if (!stato?.startsWith('strava-')) return;
-  history.replaceState(null, '', location.pathname);
-  vista = 'dieta';
-  statoDieta.sezione = 'impostazioni';
-  const s = D().strava;
-  if (q.get('error') || !q.get('code')) { toast('Collegamento a Strava annullato.', true); return; }
-  if (stato !== 'strava-' + s.stato) { toast('Risposta di Strava non riconosciuta: riprova a collegare.', true); return; }
-  if (!/activity:read/.test(q.get('scope') || '')) {
-    toast('Per leggere le attività serve il permesso sulle attività: riprova lasciando la spunta.', true);
-    return;
-  }
-  chiamaWorker('/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: q.get('code') })
-  }).then(t => {
-    s.token = {
-      access: t.access_token,
-      refresh: t.refresh_token,
-      scade: t.expires_at,
-      atleta: [t.athlete?.firstname, t.athlete?.lastname].filter(Boolean).join(' ')
-    };
-    s.stato = null;
-    salva();
-    render();
-    toast('Strava collegato.');
-    sincronizzaStrava(false);
-  }).catch(e => toast('Collegamento a Strava non riuscito: ' + e.message, true));
-}
-
-async function tokenStrava() {
-  const s = D().strava;
-  if (!s.token) throw new Error('Strava non è collegato.');
-  if (s.token.scade * 1000 > Date.now() + 60000) return s.token.access;
-  const t = await chiamaWorker('/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: s.token.refresh })
-  });
-  Object.assign(s.token, { access: t.access_token, refresh: t.refresh_token, scade: t.expires_at });
-  salva();
-  return s.token.access;
-}
-
-async function apiStrava(percorso) {
-  const token = await tokenStrava();
-  return chiamaWorker('/api' + percorso, { headers: { Authorization: 'Bearer ' + token } });
-}
-
-function attivitaDaStrava(x) {
-  const locale = x.start_date_local || x.start_date || '';
-  const km = x.distance ? x.distance / 1000 : 0;
-  const a = {
-    id: nuovoId(),
-    fonte: 'strava',
-    idFonte: String(x.id),
-    inizio: Math.round(Date.parse(x.start_date) / 1000) || 0,
-    data: locale.slice(0, 10),
-    ora: locale.slice(11, 16),
-    categoria: categoriaDa(x.sport_type || x.type || ''),
-    nome: x.name || x.sport_type || 'Attività',
-    durataMin: Math.round((x.elapsed_time || x.moving_time || 0) / 60)
-  };
-  if (km) {
-    a.distanzaKm = Math.round(km * 100) / 100;
-    if (x.moving_time) a.velocita = Math.round(km / (x.moving_time / 3600) * 10) / 10;
-  }
-  return a;
-}
-
-async function sincronizzaStrava(silenzioso) {
-  const d = D(), s = d.strava;
-  if (!s.token || syncStravaInCorso) return;
-  syncStravaInCorso = true;
-  ultimoTentativoStrava = Date.now();
-  if (!silenzioso) toast('Sincronizzo Strava…');
-  try {
-    const ultima = d.attivita.filter(a => a.fonte === 'strava').reduce((m, a) => Math.max(m, a.inizio || 0), 0);
-    const primoGiorno = [inizioMonitoraggio(), piuGiorni(oggiISO(), -90)].sort()[1];
-    const dopo = ultima ? ultima - 2 * 86400 : Math.floor(new Date(primoGiorno + 'T00:00:00').getTime() / 1000);
-    const lista = [];
-    for (let pagina = 1; pagina <= 5; pagina++) {
-      const p = await apiStrava(`/athlete/activities?after=${dopo}&per_page=100&page=${pagina}`);
-      lista.push(...p);
-      if (p.length < 100) break;
-    }
-    let nuove = 0, doppie = 0;
-    for (const x of lista) {
-      const id = String(x.id);
-      if (s.ignorate.includes(id) || d.attivita.some(a => a.idFonte === id)) continue;
-      const a = attivitaDaStrava(x);
-      if (d.attivita.some(b => stessaAttivita(a, b))) { doppie++; continue; }
-      d.attivita.push(a);
-      nuove++;
-    }
-    // Le calorie sono solo nel dettaglio dell'attività: poche richieste per volta.
-    const senzaKcal = d.attivita.filter(a => a.fonte === 'strava' && a.kcalTotali == null && !a.senzaKcal).slice(0, 30);
-    for (const a of senzaKcal) {
-      const det = await apiStrava('/activities/' + a.idFonte);
-      if (det.calories > 0) a.kcalTotali = Math.round(det.calories);
-      else a.senzaKcal = true;
-    }
-    s.ultimaSync = new Date().toISOString();
-    salva();
-    if (vista === 'dieta' && !document.activeElement?.matches('input, textarea, select')) render();
-    if (!silenzioso || nuove) {
-      toast(nuove
-        ? `Strava: ${nuove === 1 ? '1 attività nuova' : nuove + ' attività nuove'}${doppie ? ` (${doppie} già presenti dal CSV)` : ''}.`
-        : 'Strava: nessuna attività nuova.');
-    }
-  } catch (e) {
-    if (e.stato === 401) {
-      s.token = null;
-      salva();
-      if (vista === 'dieta') render();
-      toast('Strava non accetta più il collegamento: collegalo di nuovo da ⚙.', true);
-    } else if (!silenzioso) {
-      toast('Sincronizzazione con Strava non riuscita: ' + e.message, true);
-    }
-  } finally {
-    syncStravaInCorso = false;
-  }
-}
-
-// Aprendo la sezione si sincronizza da solo, al massimo ogni 3 ore.
-function syncStravaAutomatica() {
-  const s = D().strava;
-  if (!s.token || syncStravaInCorso || !navigator.onLine) return;
-  if (Date.now() - ultimoTentativoStrava < 3 * 3600000) return;
-  if (s.ultimaSync && Date.now() - Date.parse(s.ultimaSync) < 3 * 3600000) return;
-  sincronizzaStrava(true);
+  render();
+  toast(tieniGarmin ? "Tenuta l'attività di Garmin." : 'Tenuta la tua: quella di Garmin non verrà più importata.');
 }
 
 // ===================== Grafico del bilancio =====================
@@ -1179,7 +1057,6 @@ function renderDieta() {
       ${SEZIONI_DIETA.map(([k, t]) => `<button data-azione="dt-sezione" data-s="${k}" class="${k === s ? 'attiva' : ''}"${k === 'impostazioni' ? ' aria-label="Impostazioni della dieta"' : ''}>${t}</button>`).join('')}
     </div>
     ${viste[s]()}`;
-  syncStravaAutomatica();
 }
 
 function statoSaldo(v) {
@@ -1384,7 +1261,11 @@ function htmlGiorno() {
       <h3>Attività${c.extra ? ` <span class="muto">extra ${fmtKcal(c.extra)} kcal</span>` : ''}</h3>
       ${c.attivita.length ? c.attivita.map(x => rigaAttivita(x.a, true)).join('') : '<p class="muto piccolo">Nessuna attività registrata.</p>'}
       ${d.impostazioni.attivitaPrevistaKcal && c.kcalAttivita ? `<p class="muto piccolo">Le prime ${fmtKcal(d.impostazioni.attivitaPrevistaKcal)} kcal di attività del giorno sono già previste dalla dieta.</p>` : ''}
-      <div class="riga-bottoni"><button class="btn" data-azione="dt-nuova-attivita" data-data="${data}">+ Aggiungi attività</button></div>
+      ${d.daVerificare.length ? `<div class="nota">Ci sono attività di Garmin da verificare: <button class="btn testo" data-azione="dt-sezione" data-s="attivita">vai ad Attività</button></div>` : ''}
+      <div class="riga-bottoni">
+        ${BOTTONE_GARMIN()}
+        <button class="btn" data-azione="dt-nuova-attivita" data-data="${data}">+ A mano</button>
+      </div>
     </section>`;
 }
 
@@ -1413,10 +1294,11 @@ function htmlFormAttivita() {
       <h3>Nuova attività</h3>
       <div class="ed-riga">
         <label class="campo"><span>Data</span><input type="date" data-dt="fa.data" value="${esc(f.data)}" max="${oggiISO()}"></label>
-        <label class="campo"><span>Tipo</span>
-          <select data-dt="fa.categoria">${Object.entries(TIPI_ATTIVITA).map(([k, t]) => `<option value="${k}"${k === f.categoria ? ' selected' : ''}>${t.nome}</option>`).join('')}</select>
-        </label>
+        <label class="campo"><span>Ora di inizio</span><input type="time" data-dt="fa.ora" value="${esc(f.ora)}"></label>
       </div>
+      <label class="campo"><span>Tipo</span>
+        <select data-dt="fa.categoria">${Object.entries(TIPI_ATTIVITA).map(([k, t]) => `<option value="${k}"${k === f.categoria ? ' selected' : ''}>${t.nome}</option>`).join('')}</select>
+      </label>
       <div class="ed-riga">
         <label class="campo"><span>Durata (minuti)</span><input inputmode="numeric" data-dt="fa.durata" value="${esc(f.durata)}" autocomplete="off"></label>
         ${tipo.velocita
@@ -1428,7 +1310,8 @@ function htmlFormAttivita() {
         <label class="campo"><span>MET</span><input inputmode="decimal" data-dt="fa.met" value="${esc(f.met)}" placeholder="${esc(fmtNum(metAuto))}" autocomplete="off"></label>
       </div>
       <div class="nota" id="stima-attivita">${testoStima(f)}</div>
-      <p class="muto piccolo">Formula: kcal attive = (MET − 1) × peso (kg) × ore. Il −1 toglie il consumo a riposo, che è già nel metabolismo basale. MET di riferimento: camminata 6 km/h ≈ 4,7 · corsa 8 km/h ≈ 8,3 · bici moderata ≈ 6,8 · pesi ≈ 5.</p>
+      <p class="muto piccolo">Formula: kcal attive = (MET − 1) × peso (kg) × ore. Il −1 toglie il consumo a riposo, che è già nel metabolismo basale. MET di riferimento: camminata 6 km/h ≈ 4,7 · corsa 8 km/h ≈ 8,3 · bici moderata ≈ 6,8 · pesi ≈ 5.
+      L'ora di inizio è facoltativa e serve a riconoscerla se poi arriva anche da Garmin.</p>
       <div class="riga-bottoni">
         <button class="btn" data-azione="dt-annulla-attivita">Annulla</button>
         <button class="btn primario" data-azione="dt-salva-attivita">Salva</button>
@@ -1436,52 +1319,62 @@ function htmlFormAttivita() {
     </section>`;
 }
 
-function htmlAnteprimaCSV() {
-  const c = statoDieta.csvInAttesa;
-  if (!c) return '';
-  if (c.errore) return `<div class="nota errore-testo">${esc(c.errore)}</div>`;
+// Pulsante che apre la scelta del file: il file resta sul telefono, si leggono solo i dati.
+const BOTTONE_GARMIN = (classe = 'btn') =>
+  `<label class="${classe}">Importa Garmin<input type="file" accept=".csv,text/csv,text/comma-separated-values,application/vnd.ms-excel,text/plain" data-dt="file-csv" hidden></label>`;
+
+function htmlDaVerificare() {
+  const d = D();
+  if (!d.daVerificare.length) return '';
+  const blocco = (etichetta, a) => a
+    ? `<div><span class="etichetta">${etichetta}</span> <b>${esc(a.nome || TIPI_ATTIVITA[a.categoria]?.nome || 'Attività')}</b>
+         <div class="muto piccolo">${esc(fmtGiorno(a.data))} · ${esc(descrAttivita(a))}</div>
+         <div class="piccolo">${fmtKcal(kcalAttive(a))} kcal attive</div></div>`
+    : `<div><span class="etichetta">${etichetta}</span> <span class="muto piccolo">eliminata nel frattempo</span></div>`;
   return `
-    <div class="nota">
-      Colonne usate: ${esc(c.colonne.join(', '))}.<br>
-      Nuove: <b>${c.nuove.length}</b> · già presenti: ${c.doppie} · prima dell'inizio del monitoraggio: ${c.vecchie}${c.scartate ? ` · righe senza data: ${c.scartate}` : ''}
-    </div>
-    ${c.nuove.slice(0, 5).map(a => rigaAttivita(a, false)).join('')}
-    ${c.nuove.length > 5 ? `<p class="muto piccolo">…e altre ${c.nuove.length - 5}.</p>` : ''}
-    <div class="riga-bottoni">
-      <button class="btn" data-azione="dt-annulla-csv">Annulla</button>
-      ${c.nuove.length ? `<button class="btn primario" data-azione="dt-importa-csv">Importa ${c.nuove.length === 1 ? "l'attività" : c.nuove.length + ' attività'}</button>` : ''}
-    </div>`;
+    <section class="card dt-verifica">
+      <h3>Da verificare (${d.daVerificare.length})</h3>
+      <p class="muto piccolo">Queste attività di Garmin si sovrappongono a una che hai inserito a mano. Scegli quale tenere, così le calorie non si sommano.</p>
+      ${d.daVerificare.map((v, i) => `
+        <div class="dt-confronto">
+          ${blocco('Garmin', v.attivita)}
+          ${blocco('A mano', d.attivita.find(a => a.id === v.manualeId))}
+          <div class="riga-bottoni">
+            <button class="btn" data-azione="dt-tieni-manuale" data-i="${i}">Tieni la mia</button>
+            <button class="btn primario" data-azione="dt-tieni-garmin" data-i="${i}">Tieni Garmin</button>
+          </div>
+        </div>`).join('')}
+    </section>`;
 }
 
 function htmlAttivita() {
-  const d = D(), s = d.strava;
+  const d = D(), u = statoDieta.ultimoImport;
   const lista = [...d.attivita].sort((a, b) => (b.data + (b.ora || '')).localeCompare(a.data + (a.ora || '')));
   const mostrate = statoDieta.tutteAttivita ? lista : lista.slice(0, 30);
+  const altro = u ? [
+    u.precedenti ? `${u.precedenti} prima dell'inizio del monitoraggio, ignorate` : '',
+    u.illeggibili ? `${u.illeggibili} righe illeggibili` : ''
+  ].filter(Boolean).join(', ') : '';
   return `
     <section class="card">
-      <h3>Strava</h3>
-      ${s.token
-        ? `<p class="muto piccolo">Collegato. ${s.ultimaSync ? 'Ultima sincronizzazione: ' + esc(fmtQuando(s.ultimaSync)) + '.' : ''} Le attività di Garmin arrivano qui passando da Strava.</p>
-           <div class="riga-bottoni"><button class="btn primario" data-azione="dt-sync-strava">Sincronizza ora</button></div>`
-        : `<p class="muto piccolo">Non collegato. Puoi collegarlo da ⚙ oppure importare il CSV di Garmin Connect qui sotto.</p>
-           <div class="riga-bottoni"><button class="btn" data-azione="dt-vai-impostazioni">Collega Strava</button></div>`}
+      <h3>Importa Garmin</h3>
+      <p class="muto piccolo">Su Garmin Connect: Attività → Tutte le attività → Esporta CSV. Poi tocca «Importa Garmin» e scegli il file Activities.csv. Puoi importarlo tutte le volte che vuoi: le attività già presenti vengono saltate, quelle cambiate aggiornate.</p>
+      <div class="riga-bottoni">${BOTTONE_GARMIN('btn primario')}</div>
+      ${u ? `<div class="nota">Ultima importazione: ${esc(testoRiepilogoGarmin(u))}.${altro ? `<br><span class="muto">${esc(altro)}.</span>` : ''}</div>` : ''}
     </section>
+
+    ${htmlDaVerificare()}
 
     ${statoDieta.formAttivita ? htmlFormAttivita() : `<button class="btn largo" data-azione="dt-nuova-attivita" style="margin-bottom:12px">+ Aggiungi attività a mano</button>`}
-
-    <section class="card">
-      <h3>Importa CSV di Garmin Connect</h3>
-      <p class="muto piccolo">Dal computer: connect.garmin.com → Attività → Tutte le attività → «Esporta CSV» in alto a destra (prima scorri la lista fin dove ti serve). Le attività già presenti, anche da Strava, vengono saltate.</p>
-      <div class="riga-bottoni"><label class="btn">Scegli file CSV<input type="file" accept=".csv,text/csv,text/plain" data-dt="file-csv" hidden></label></div>
-      ${htmlAnteprimaCSV()}
-    </section>
 
     <h3 class="sezione">Attività (${lista.length})</h3>
     <section class="card">
       ${mostrate.length ? mostrate.map(a => rigaAttivita(a, true)).join('') : '<p class="muto piccolo">Nessuna attività registrata.</p>'}
       ${lista.length > mostrate.length ? `<div class="riga-bottoni"><button class="btn" data-azione="dt-tutte-attivita">Mostra tutte (${lista.length})</button></div>` : ''}
     </section>
-    <p class="muto piccolo">Si usano sempre le calorie attive: da Garmin e Strava si toglie la quota del basale durante l'attività; le attività senza calorie si stimano con i MET.</p>`;
+    <p class="muto piccolo">Si usano le calorie attive. ${d.impostazioni.correzioneBasale
+      ? 'Dalle calorie di Garmin si toglie la quota del basale: kcal attive = Calorie − basale × (durata in ore / 24).'
+      : 'La correzione del basale sulle calorie di Garmin è disattivata (⚙).'} Le attività senza calorie si stimano con i MET.</p>`;
 }
 
 // ---------- Bilancio ----------
@@ -1635,7 +1528,7 @@ function htmlPiano(p) {
 }
 
 function htmlImpostazioni() {
-  const d = D(), imp = d.impostazioni, s = d.strava;
+  const d = D(), imp = d.impostazioni;
   const piano = d.piani.length ? pianoDel(oggiISO()) : null;
   const attesa = statoDieta.dietaInAttesa;
   let anteprima = '';
@@ -1675,7 +1568,11 @@ function htmlImpostazioni() {
         <label class="campo"><span>Basale BIA (kcal/giorno)</span><input inputmode="numeric" data-dt="imp.basale" value="${esc(imp.basale ?? '')}" autocomplete="off"></label>
         <label class="campo"><span>Peso (kg)</span><input inputmode="decimal" data-dt="imp.peso" value="${esc(fmtNum(imp.peso))}" autocomplete="off"></label>
       </div>
-      <p class="muto piccolo">Il basale serve a togliere la quota a riposo dalle calorie di Garmin e Strava; il peso serve alle stime con i MET.</p>
+      <p class="muto piccolo">Il peso serve alle stime con i MET.</p>
+      <label class="spunta-campo"><input type="checkbox" data-dt="imp.correzioneBasale"${imp.correzioneBasale ? ' checked' : ''}> Togli il basale dalle calorie di Garmin</label>
+      <p class="muto piccolo">Le calorie di Garmin di solito comprendono anche il metabolismo basale, già contato nella dieta. Con la correzione:
+      kcal attive = Calorie − basale × (durata in ore / 24).
+      Esempio: 30 minuti da 300 kcal con basale ${fmtKcal(imp.basale || 2040)} → 300 − ${fmtKcal((imp.basale || 2040) * 0.5 / 24)} = ${fmtKcal(300 - (imp.basale || 2040) * 0.5 / 24)} kcal attive.</p>
       <p class="muto piccolo" style="margin-bottom:0">Attività già prevista dalla dieta (non conta come extra):</p>
       <div class="dt-tipi">
         ${Object.entries(TIPI_ATTIVITA).map(([k, t]) => `<label class="spunta-campo"><input type="checkbox" data-dt="imp.tipo" data-tipo="${k}"${imp.tipiPrevisti.includes(k) ? ' checked' : ''}> ${t.nome}</label>`).join('')}
@@ -1683,19 +1580,6 @@ function htmlImpostazioni() {
       <label class="campo"><span>Altre kcal di attività al giorno già previste</span><input inputmode="numeric" data-dt="imp.attivitaPrevistaKcal" value="${esc(imp.attivitaPrevistaKcal || '')}" placeholder="0" autocomplete="off"></label>
       <label class="campo"><span>Inizio del monitoraggio</span><input type="date" data-dt="imp.inizio" value="${esc(imp.inizio || '')}"></label>
       <p class="muto piccolo">Vuoto = dal primo giorno con dati (ora: ${esc(fmtGiorno(inizioMonitoraggio(), true))}). Saldo = (dieta − voci tolte + sgarri) − (obiettivo + attività extra).</p>
-    </section>
-
-    <section class="card">
-      <h3>Strava</h3>
-      ${s.token
-        ? `<p class="piccolo">Collegato${s.token.atleta ? ` come <b>${esc(s.token.atleta)}</b>` : ''}.${s.ultimaSync ? ` Ultima sincronizzazione: ${esc(fmtQuando(s.ultimaSync))}.` : ''}</p>
-           <div class="riga-bottoni">
-             <button class="btn primario" data-azione="dt-sync-strava">Sincronizza ora</button>
-             <button class="btn testo pericolo" data-azione="dt-scollega-strava">Scollega</button>
-           </div>`
-        : `<p class="muto piccolo">Percorso: Garmin Connect → Strava → app. Serve un piccolo servizio gratuito (un Cloudflare Worker) che custodisce la chiave segreta di Strava: la guida passo passo è in GUIDA-STRAVA.md.</p>
-           <label class="campo"><span>Indirizzo del worker</span><input type="url" data-dt="strava-worker" value="${esc(s.worker)}" placeholder="https://strava-palestra.nome.workers.dev" autocomplete="off"></label>
-           <div class="riga-bottoni"><button class="btn primario" data-azione="dt-collega-strava">Collega Strava</button></div>`}
     </section>`;
 }
 
@@ -1766,7 +1650,9 @@ function testoDietaPerClaude(da, a, conAllenamenti) {
   const tipi = imp.tipiPrevisti.map(k => TIPI_ATTIVITA[k]?.nome).filter(Boolean);
   r.push(`Attività già prevista nelle impostazioni: ${tipi.length ? tipi.join(', ') : 'nessun tipo'}${imp.attivitaPrevistaKcal ? ` + ${imp.attivitaPrevistaKcal} kcal/giorno` : ''}; conta solo l'attività in più.`);
   r.push('Saldo del giorno = (kcal della dieta − voci tolte + sgarri) − (obiettivo + attività extra). Positivo = sopra il piano, negativo = sotto.');
-  r.push('Le calorie delle attività sono calorie attive, senza il consumo a riposo.');
+  r.push(imp.correzioneBasale && imp.basale
+    ? 'Le calorie delle attività sono calorie attive: a quelle di Garmin è tolta la quota del basale (Calorie − basale × ore / 24).'
+    : 'Le calorie delle attività di Garmin sono quelle del file, senza togliere la quota del basale.');
 
   if (piano) {
     r.push('');
@@ -1884,6 +1770,8 @@ function campoDieta(el) {
       d.impostazioni.tipiPrevisti = v ? [...lista, el.dataset.tipo] : lista;
     } else if (campo === 'inizio') {
       d.impostazioni.inizio = v || null;
+    } else if (campo === 'correzioneBasale') {
+      d.impostazioni.correzioneBasale = v;
     } else {
       d.impostazioni[campo] = numero(v);
     }
@@ -1914,9 +1802,6 @@ function campoDieta(el) {
     if (k === 'export-periodo') statoDieta.exportPeriodo = v;
     else statoDieta.exportAllenamenti = v;
     $('#testo-export-dieta').value = testoExportDieta();
-  } else if (k === 'strava-worker') {
-    d.strava.worker = v.trim().replace(/\/+$/, '');
-    salva();
   }
 }
 
@@ -1928,14 +1813,19 @@ function fileDieta(el) {
       statoDieta.testoDieta = testo;
       controllaDieta(testo);
     } else if (tipo === 'file-csv') {
+      // Del file si tengono solo le attività estratte: il testo non viene salvato.
       try {
-        statoDieta.csvInAttesa = attivitaDaCSV(testo);
+        const r = importaGarmin(testo);
+        statoDieta.ultimoImport = r;
+        salva();
+        if (r.verificare) statoDieta.sezione = 'attivita';
+        render();
+        toast(`Garmin: ${testoRiepilogoGarmin(r)}.`);
       } catch (e) {
-        statoDieta.csvInAttesa = { errore: e.message };
+        toast(e.message, true);
       }
-      render();
     }
-  });
+  }).catch(e => toast('Impossibile leggere il file: ' + e.message, true));
 }
 
 const azioniDieta = {
@@ -1983,24 +1873,18 @@ const azioniDieta = {
   'dt-elimina-attivita': async b => {
     const d = D();
     const a = d.attivita.find(x => x.id === b.dataset.id);
-    if (!a || !await chiedi(`Eliminare l'attività del ${fmtGiorno(a.data)} (${TIPI_ATTIVITA[a.categoria]?.nome || 'attività'})?`, 'Elimina', true)) return;
-    // Un'attività di Strava eliminata non deve tornare alla sincronizzazione successiva.
-    if (a.fonte === 'strava') d.strava.ignorate.push(a.idFonte);
+    const daGarmin = a?.fonte === 'garmin';
+    const domanda = `Eliminare l'attività del ${a ? fmtGiorno(a.data) : ''} (${a?.nome || 'attività'})?${daGarmin ? '\nNon verrà reimportata con i prossimi file di Garmin.' : ''}`;
+    if (!a || !await chiedi(domanda, 'Elimina', true)) return;
+    // Un'attività di Garmin eliminata non deve tornare alla prossima importazione.
+    if (daGarmin && a.chiaveGarmin) d.garminScartate.push(a.chiaveGarmin);
     d.attivita = d.attivita.filter(x => x.id !== a.id);
     salva();
     render();
   },
   'dt-tutte-attivita': () => { statoDieta.tutteAttivita = true; render(); },
-  'dt-importa-csv': () => {
-    const c = statoDieta.csvInAttesa;
-    if (!c?.nuove?.length) return;
-    D().attivita.push(...c.nuove);
-    statoDieta.csvInAttesa = null;
-    salva();
-    render();
-    toast(`Importate ${c.nuove.length === 1 ? '1 attività' : c.nuove.length + ' attività'}.`);
-  },
-  'dt-annulla-csv': () => { statoDieta.csvInAttesa = null; render(); },
+  'dt-tieni-garmin': b => risolviVerifica(Number(b.dataset.i), true),
+  'dt-tieni-manuale': b => risolviVerifica(Number(b.dataset.i), false),
   'dt-periodo': b => { statoDieta.periodo = b.dataset.p; statoDieta.sel = null; render(); },
   'dt-periodo-sposta': b => {
     statoDieta.rif = spostaPeriodo(statoDieta.periodo, statoDieta.rif || oggiISO(), Number(b.dataset.d));
@@ -2025,13 +1909,5 @@ const azioniDieta = {
   'dt-copia-export': () => copiaExportDieta(),
   'dt-condividi-export': () => navigator.share({ text: $('#testo-export-dieta').value }).catch(() => {}),
   'dt-controlla-dieta': () => controllaDieta(statoDieta.testoDieta),
-  'dt-usa-dieta': () => usaDieta(),
-  'dt-collega-strava': () => collegaStrava(),
-  'dt-sync-strava': () => sincronizzaStrava(false),
-  'dt-scollega-strava': async () => {
-    if (!await chiedi("Scollegare Strava? Le attività già importate restano. Puoi revocare l'accesso anche da strava.com → Impostazioni → Le mie app.", 'Scollega', true)) return;
-    D().strava.token = null;
-    salva();
-    render();
-  }
+  'dt-usa-dieta': () => usaDieta()
 };

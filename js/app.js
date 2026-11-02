@@ -1,6 +1,6 @@
 'use strict';
 
-const VERSIONE_APP = '1.5';
+const VERSIONE_APP = '1.6';
 const GIRI_BIP = 4;
 const CHIAVE = 'scheda-palestra-dati';
 const GIORNI_SETTIMANA = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
@@ -1333,7 +1333,7 @@ function scaricaBackup() {
     formato: 'backup-palestra',
     versione: 1,
     esportatoIl: new Date().toISOString(),
-    dati: { ...dati, sedutaInCorso: null, dieta: dietaPerBackup() }
+    dati: { ...dati, sedutaInCorso: null }
   }, null, 1);
   const nome = `backup-palestra-${dataISO(new Date())}.json`;
   const file = new File([contenutoFile], nome, { type: 'application/json' });
@@ -1378,12 +1378,9 @@ async function ripristinaBackup(testo) {
   if (!await chiedi(`Ripristinare il backup del ${fmtData(o.esportatoIl)} (${n} sedute)? I dati attuali saranno sostituiti.`, 'Ripristina', true)) return;
   fermaTimer();
   rilasciaWakeLock();
-  // Il collegamento a Strava non è nel backup: resta quello di questo telefono.
-  const stravaPrima = dati.dieta?.strava?.token;
   dati = Object.assign(datiVuoti(), d, { sedutaInCorso: null });
   dati.impostazioni = Object.assign(datiVuoti().impostazioni, d.impostazioni);
   preparaDieta();
-  if (stravaPrima && !dati.dieta.strava.token) dati.dieta.strava.token = stravaPrima;
   salva();
   toast('Backup ripristinato.');
   vai('allena');
@@ -1536,15 +1533,13 @@ async function avvia() {
       toast('Impossibile caricare la scheda iniziale: ' + e.message, true);
     }
   }
-  if (!dati.dieta) {
-    preparaDieta();
-    salva();
-  }
+  // Crea la sezione Dieta o aggiorna i dati salvati dalle versioni precedenti.
+  preparaDieta();
+  salva();
   // Un recupero scaduto mentre l'app era chiusa non va riproposto.
   const t = dati.sedutaInCorso?.timer;
   if (t && t.fine < Date.now()) dati.sedutaInCorso.timer = null;
   if (dati.sedutaInCorso) richiediWakeLock();
-  ritornoStrava();
   render();
 
   navigator.storage?.persist?.().catch(() => {});

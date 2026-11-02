@@ -3,7 +3,7 @@
 Web app (PWA) per seguire la scheda di palestra e il bilancio calorico della
 dieta dal telefono Android: funziona offline, salva i dati sul telefono e
 scambia scheda, dieta e sgarri con Claude tramite testo e file JSON. Gratis,
-senza account e senza server (tranne il collegamento facoltativo a Strava).
+senza account e senza server.
 
 ## Cosa contiene la cartella
 
@@ -15,8 +15,6 @@ senza account e senza server (tranne il collegamento facoltativo a Strava).
 | `scheda-iniziale.json` | La scheda caricata al primo avvio |
 | `FORMATO-SCHEDA.md` | Descrizione del formato JSON delle schede |
 | `FORMATO-DIETA.md` | Formato JSON della dieta e degli sgarri, e calcolo del saldo |
-| `GUIDA-STRAVA.md` | Come collegare Garmin → Strava → app |
-| `strava-worker/worker.js` | Il codice da incollare su Cloudflare per Strava |
 
 ---
 
@@ -89,24 +87,46 @@ la parte della sezione:
 - **Sgarri**: descrivi lo sgarro a Claude, che risponde con un breve blocco di
   testo; incollalo in **Incolla sgarro** → **Controlla** → **Aggiungi**.
   Puoi anche inserirlo a mano, modificarlo o eliminarlo.
-- **Attività**: attività da Strava, dal CSV di Garmin Connect o inserite a mano
-  (con la stima delle calorie tramite MET, formula mostrata).
+- **Attività**: attività importate da Garmin o inserite a mano (con la stima
+  delle calorie tramite MET, formula mostrata).
 - **Bilancio**: grafico per giorno, settimana, mese, trimestre o anno (barre
   rosse sopra la dieta, blu sotto, linea del saldo cumulato), riepilogo del
   periodo ed **Esporta per Claude**.
 - **⚙**: carica la dieta (JSON preparato da Claude), imposta metabolismo basale
-  BIA, peso, attività già prevista dalla dieta, e collega Strava.
+  BIA, peso e attività già prevista dalla dieta.
 
 Saldo del giorno = (dieta − voci tolte + sgarri) − (obiettivo + attività extra).
-I dettagli e il formato JSON sono in [FORMATO-DIETA.md](FORMATO-DIETA.md);
-il collegamento a Strava in [GUIDA-STRAVA.md](GUIDA-STRAVA.md).
+I dettagli e il formato JSON sono in [FORMATO-DIETA.md](FORMATO-DIETA.md).
 
-Primi passi:
+### Importa Garmin
+
+1. Su Garmin Connect: **Attività → Tutte le attività → Esporta CSV**. Si
+   scarica il file `Activities.csv`.
+2. Nell'app: **Dieta → Attività → Importa Garmin** e scegli il file.
+3. Compare il riepilogo, per esempio «3 nuove, 5 già presenti, 1 aggiornata,
+   1 da verificare».
+
+Puoi importare lo stesso file tutte le volte che vuoi. Ogni attività si
+riconosce da tipo e data al secondo: le nuove si aggiungono, le già presenti
+si saltano, quelle con valori cambiati si aggiornano. Se un'attività di Garmin
+si sovrappone a una inserita a mano, finisce in **Da verificare** e scegli tu
+quale tenere. Le attività eliminate, o scartate in Da verificare, non
+tornano con le importazioni successive.
+
+Le calorie di Garmin comprendono anche il metabolismo basale: l'app calcola
+*kcal attive = Calorie − basale × (durata in ore / 24)*. La correzione si può
+disattivare in **Dieta → ⚙**.
+
+Privacy: il file `Activities.csv` resta sul telefono. L'app ne legge solo i
+dati delle attività e salva quelli. **Non mettere il file nella cartella
+dell'app e non caricarlo su GitHub.**
+
+### Primi passi
 
 1. Chiedi a Claude la dieta nel formato di FORMATO-DIETA.md (puoi incollargli
    il file) e caricala da **Dieta → ⚙**.
-2. Sempre in ⚙ scrivi basale e peso.
-3. Facoltativo: collega Strava seguendo GUIDA-STRAVA.md, oppure importa il CSV.
+2. Sempre in ⚙ controlla basale e peso.
+3. Importa le attività da Garmin quando vuoi.
 4. Ogni tanto **Bilancio → Esporta per Claude** e chiedigli come bilanciare la
    settimana.
 
@@ -130,8 +150,7 @@ I dati stanno solo nel telefono, dentro Chrome. Disinstallando l'app o
 cancellando i dati di Chrome si perdono. Ogni tanto fai
 **Dati → Salva backup** e salva il file su Google Drive. Per recuperarli,
 su un telefono nuovo, usa **Dati → Ripristina…**.
-Il backup contiene anche la dieta (sgarri, attività, impostazioni), ma non
-il collegamento a Strava: dopo un ripristino su un altro telefono, ricollegalo.
+Il backup contiene anche la dieta (sgarri, attività, impostazioni).
 
 ## 6. Modificare l'app in futuro
 
